@@ -81,8 +81,8 @@ func JSON_RESPONSE(w http.ResponseWriter, data interface{}) {
 func Get(context context.Context, key string) (string, error) {
 	dataRWMutex.RLock()
 	defer dataRWMutex.RUnlock()
-	value := data[key]
-	return value, nil
+
+	return data[key], nil
 }
 
 // Set: Establish a provided value for specified key
