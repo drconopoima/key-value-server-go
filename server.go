@@ -79,21 +79,21 @@ func JSON_RESPONSE(w http.ResponseWriter, data interface{}) {
 
 func Get(context context.Context, key string) (string, error) {
 	dataRWMutex.RLock()
+	defer dataRWMutex.RUnlock()
 	value := data[key]
-	dataRWMutex.RUnlock()
 	return value, nil
 }
 
 func Set(context context.Context, key string, value string) error {
 	dataRWMutex.Lock()
+	defer dataRWMutex.Unlock()
 	data[key] = value
-	dataRWMutex.Unlock()
 	return nil
 }
 
 func Delete(context context.Context, key string) error {
 	dataRWMutex.Lock()
+	defer dataRWMutex.Unlock()
 	delete(data, key)
-	dataRWMutex.Unlock()
 	return nil
 }
