@@ -77,6 +77,7 @@ func JSON_RESPONSE(w http.ResponseWriter, data interface{}) {
 	w.Write(json_bytes)
 }
 
+// Get: Retrieve value at specified key
 func Get(context context.Context, key string) (string, error) {
 	dataRWMutex.RLock()
 	defer dataRWMutex.RUnlock()
@@ -84,6 +85,7 @@ func Get(context context.Context, key string) (string, error) {
 	return value, nil
 }
 
+// Set: Establish a provided value for specified key
 func Set(context context.Context, key string, value string) error {
 	dataRWMutex.Lock()
 	defer dataRWMutex.Unlock()
@@ -91,6 +93,7 @@ func Set(context context.Context, key string, value string) error {
 	return nil
 }
 
+// Delete: Remove a provided key:value pair
 func Delete(context context.Context, key string) error {
 	dataRWMutex.Lock()
 	defer dataRWMutex.Unlock()
