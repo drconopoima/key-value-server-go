@@ -9,15 +9,28 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
 
+type dataVessel struct {
+	data  map[string]string
+	mutex sync.RWMutex
+}
+
 var (
-	data        = map[string]string{}
-	dataRWMutex = sync.RWMutex{}
+	data = dataVessel{
+		data:  map[string]string{},
+		mutex: sync.RWMutex{},
+	}
+	base64Data = dataVessel{
+		data:  map[string]string{},
+		mutex: sync.RWMutex{},
+	}
 )
 
 func main() {
@@ -31,7 +44,26 @@ func main() {
 	storageDir := os.Getenv("STORAGE_DIR")
 	dataFile := dataPath(storageDir)
 	// Load data from file
-	data, _ = loadData(context.TODO(), dataFile)
+	err := loadData(dataFile, &base64Data)
+	if err != nil {
+		log.Println("[Warning] Could not load data file", dataFile, err.Error())
+	}
+	// Interval between saves to disk
+	saveInterval := 60
+	if saveIntervalFromEnv := os.Getenv("SAVE_INTERVAL"); saveIntervalFromEnv != "" {
+		saveIntervalTry, err := strconv.Atoi(saveIntervalFromEnv)
+		if err != nil {
+			log.Println("[Warning] Could not use environment SAVE_INTERVAL of", saveIntervalFromEnv, ", got error:", err.Error(), "using default value of ", saveInterval)
+		} else {
+			saveInterval = saveIntervalTry
+		}
+	}
+	var quitChannel chan bool
+	schedule(time.Duration(saveInterval)*time.Second, saveData, &base64Data, dataFile, &quitChannel)
+	err = decodeWhole(&base64Data, &data)
+	if err != nil {
+		log.Println("[Warning] Could not decode base64 data from file", err.Error())
+	}
 	router := chi.NewRouter()
 	router.Use(middleware.Logger)
 	router.Get("/key/{key}", func(writerGet http.ResponseWriter, requestGet *http.Request) {
@@ -86,33 +118,31 @@ func JSON(writer http.ResponseWriter, data interface{}) {
 
 // Get: Retrieve value at specified key
 func Get(context context.Context, key, dataFile string) (string, error) {
-	dataRWMutex.RLock()
-	defer dataRWMutex.RUnlock()
+	data.mutex.RLock()
+	defer data.mutex.RUnlock()
 
-	return data[key], nil
+	return data.data[key], nil
 }
 
 // Set: Establish a provided value for specified key
 func Set(context context.Context, key, value, dataFile string) error {
-	dataRWMutex.Lock()
-	defer dataRWMutex.Unlock()
-	data[key] = value
-	err := saveData(context, data, dataFile)
-	if err != nil {
-		return err
-	}
+	data.mutex.Lock()
+	defer data.mutex.Unlock()
+	data.data[key] = value
+	encodedKey := encode(key)
+	encodedValue := encode(value)
+	base64Data.data[encodedKey] = encodedValue
+
 	return nil
 }
 
 // Delete: Remove a provided key:value pair
 func Delete(context context.Context, key string, dataFile string) error {
-	dataRWMutex.Lock()
-	defer dataRWMutex.Unlock()
-	delete(data, key)
-	err := saveData(context, data, dataFile)
-	if err != nil {
-		return err
-	}
+	data.mutex.Lock()
+	defer data.mutex.Unlock()
+	delete(data.data, key)
+	base64Key := encode(key)
+	delete(base64Data.data, base64Key)
 	return nil
 }
 
@@ -125,23 +155,26 @@ func dataPath(storageDir string) string {
 	return filepath.Join(storageDir, "data.json")
 }
 
-func loadData(context context.Context, dataFile string) (map[string]string, error) {
-	empty := map[string]string{}
-
+func loadData(dataFile string, base64Data *dataVessel) error {
 	// Check if the file exists or save empty data to create.
 	if _, err := os.Stat(dataFile); os.IsNotExist(err) {
-		return empty, saveData(context, empty, dataFile)
+		return saveData(base64Data, dataFile)
 	}
 
 	fileContents, err := os.ReadFile(dataFile)
 	if err != nil {
-		return empty, err
+		return err
 	}
 
-	return decode(&fileContents)
+	base64Data.mutex.Lock()
+	defer base64Data.mutex.Unlock()
+	if err := json.Unmarshal(fileContents, &base64Data.data); err != nil {
+		return err
+	}
+	return nil
 }
 
-func saveData(context context.Context, data map[string]string, dataFile string) error {
+func saveData(base64Data *dataVessel, dataFile string) error {
 	// Parent directory
 	parentDir := filepath.Dir(dataFile)
 	// Check if directory exists and create it if missing.
@@ -151,40 +184,50 @@ func saveData(context context.Context, data map[string]string, dataFile string) 
 			return err
 		}
 	}
-	encodedData, err := encode(&data)
+	base64Data.mutex.RLock()
+	defer base64Data.mutex.RUnlock()
+	byteData, err := json.Marshal(base64Data.data)
 	if err != nil {
 		return err
 	}
-
-	return os.WriteFile(dataFile, encodedData, 0644)
+	return os.WriteFile(dataFile, byteData, 0644)
 }
 
-func encode(data *map[string]string) ([]byte, error) {
-	encodedData := map[string]string{}
-	for key, value := range *data {
-		encodedKey := base64.URLEncoding.EncodeToString([]byte(key))
-		encodedValue := base64.URLEncoding.EncodeToString([]byte(value))
-		encodedData[encodedKey] = encodedValue
-	}
-	return json.Marshal(encodedData)
+func encode(text string) string {
+	base64Text := base64.URLEncoding.EncodeToString([]byte(text))
+	return base64Text
 }
 
-func decode(data *[]byte) (map[string]string, error) {
-	var jsonData map[string]string
-	if err := json.Unmarshal(*data, &jsonData); err != nil {
-		return nil, err
-	}
-	decodedData := map[string]string{}
-	for key, value := range jsonData {
+func decodeWhole(base64Data *dataVessel, data *dataVessel) error {
+	base64Data.mutex.RLock()
+	defer base64Data.mutex.RUnlock()
+	data.mutex.Lock()
+	defer data.mutex.Unlock()
+	for key, value := range base64Data.data {
 		decodedKey, err := base64.URLEncoding.DecodeString(key)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		decodedValue, err := base64.URLEncoding.DecodeString(value)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		decodedData[string(decodedKey)] = string(decodedValue)
+		(data.data)[string(decodedKey)] = string(decodedValue)
 	}
-	return decodedData, nil
+	return nil
+}
+
+func schedule(interval time.Duration, saveData func(*dataVessel, string) error, base64Data *dataVessel, dataFile string, quitChannel *chan bool) {
+	ticker := time.NewTicker(interval)
+
+	go func() {
+		for range ticker.C {
+			select {
+			case <-*quitChannel:
+				return
+			default:
+				saveData(base64Data, dataFile)
+			}
+		}
+	}()
 }
