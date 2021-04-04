@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -46,6 +48,18 @@ func main() {
 	if err != nil {
 		log.Println("[Warning] Could not load data file", dataFile, err.Error())
 	}
+	// Interval between saves to disk
+	saveInterval := 60
+	if saveIntervalFromEnv := os.Getenv("SAVE_INTERVAL"); saveIntervalFromEnv != "" {
+		saveIntervalTry, err := strconv.Atoi(saveIntervalFromEnv)
+		if err != nil {
+			log.Println("[Warning] Could not use environment SAVE_INTERVAL of", saveIntervalFromEnv, ", got error:", err.Error(), "using default value of ", saveInterval)
+		} else {
+			saveInterval = saveIntervalTry
+		}
+	}
+	var quitChannel chan bool
+	schedule(time.Duration(saveInterval)*time.Second, saveData, &base64Data, dataFile, &quitChannel)
 	err = decodeWhole(&base64Data, &data)
 	if err != nil {
 		log.Println("[Warning] Could not decode base64 data from file", err.Error())
@@ -154,7 +168,7 @@ func loadData(dataFile string, base64Data *dataVessel) error {
 
 	base64Data.mutex.Lock()
 	defer base64Data.mutex.Unlock()
-	if err := json.Unmarshal(fileContents, base64Data); err != nil {
+	if err := json.Unmarshal(fileContents, &base64Data.data); err != nil {
 		return err
 	}
 	return nil
@@ -172,7 +186,7 @@ func saveData(base64Data *dataVessel, dataFile string) error {
 	}
 	base64Data.mutex.RLock()
 	defer base64Data.mutex.RUnlock()
-	byteData, err := json.Marshal(base64Data)
+	byteData, err := json.Marshal(base64Data.data)
 	if err != nil {
 		return err
 	}
@@ -201,4 +215,19 @@ func decodeWhole(base64Data *dataVessel, data *dataVessel) error {
 		(data.data)[string(decodedKey)] = string(decodedValue)
 	}
 	return nil
+}
+
+func schedule(interval time.Duration, saveData func(*dataVessel, string) error, base64Data *dataVessel, dataFile string, quitChannel *chan bool) {
+	ticker := time.NewTicker(interval)
+
+	go func() {
+		for range ticker.C {
+			select {
+			case <-*quitChannel:
+				return
+			default:
+				saveData(base64Data, dataFile)
+			}
+		}
+	}()
 }
