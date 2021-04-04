@@ -16,8 +16,10 @@ import (
 )
 
 var (
-	data        = map[string]string{}
-	dataRWMutex = sync.RWMutex{}
+	data              = map[string]string{}
+	dataRWMutex       = sync.RWMutex{}
+	base64Data        = map[string]string{}
+	base64DataRWMutex = sync.RWMutex{}
 )
 
 func main() {
@@ -31,7 +33,14 @@ func main() {
 	storageDir := os.Getenv("STORAGE_DIR")
 	dataFile := dataPath(storageDir)
 	// Load data from file
-	data, _ = loadData(context.TODO(), dataFile)
+	err := loadData(dataFile, &base64Data)
+	if err != nil {
+		log.Println("[Warning] Could not load data file", dataFile, err.Error())
+	}
+	err = decodeWhole(&base64Data, &data)
+	if err != nil {
+		log.Println("[Warning] Could not decode base64 data from file", err.Error())
+	}
 	router := chi.NewRouter()
 	router.Use(middleware.Logger)
 	router.Get("/key/{key}", func(writerGet http.ResponseWriter, requestGet *http.Request) {
@@ -97,10 +106,10 @@ func Set(context context.Context, key, value, dataFile string) error {
 	dataRWMutex.Lock()
 	defer dataRWMutex.Unlock()
 	data[key] = value
-	err := saveData(context, data, dataFile)
-	if err != nil {
-		return err
-	}
+	encodedKey := encode(key)
+	encodedValue := encode(value)
+	base64Data[encodedKey] = encodedValue
+
 	return nil
 }
 
@@ -109,10 +118,8 @@ func Delete(context context.Context, key string, dataFile string) error {
 	dataRWMutex.Lock()
 	defer dataRWMutex.Unlock()
 	delete(data, key)
-	err := saveData(context, data, dataFile)
-	if err != nil {
-		return err
-	}
+	base64Key := encode(key)
+	delete(base64Data, base64Key)
 	return nil
 }
 
@@ -125,23 +132,29 @@ func dataPath(storageDir string) string {
 	return filepath.Join(storageDir, "data.json")
 }
 
-func loadData(context context.Context, dataFile string) (map[string]string, error) {
-	empty := map[string]string{}
+func loadData(dataFile string, base64Data *map[string]string) error {
+	base64DataRWMutex.Lock()
+	defer base64DataRWMutex.Unlock()
 
 	// Check if the file exists or save empty data to create.
 	if _, err := os.Stat(dataFile); os.IsNotExist(err) {
-		return empty, saveData(context, empty, dataFile)
+		return saveData(base64Data, dataFile)
 	}
 
 	fileContents, err := os.ReadFile(dataFile)
 	if err != nil {
-		return empty, err
+		return err
 	}
 
-	return decode(&fileContents)
+	if err := json.Unmarshal(fileContents, base64Data); err != nil {
+		return err
+	}
+	return nil
 }
 
-func saveData(context context.Context, data map[string]string, dataFile string) error {
+func saveData(base64Data *map[string]string, dataFile string) error {
+	base64DataRWMutex.RLock()
+	defer base64DataRWMutex.RUnlock()
 	// Parent directory
 	parentDir := filepath.Dir(dataFile)
 	// Check if directory exists and create it if missing.
@@ -151,40 +164,34 @@ func saveData(context context.Context, data map[string]string, dataFile string) 
 			return err
 		}
 	}
-	encodedData, err := encode(&data)
+	byteData, err := json.Marshal(base64Data)
 	if err != nil {
 		return err
 	}
-
-	return os.WriteFile(dataFile, encodedData, 0644)
+	return os.WriteFile(dataFile, byteData, 0644)
 }
 
-func encode(data *map[string]string) ([]byte, error) {
-	encodedData := map[string]string{}
-	for key, value := range *data {
-		encodedKey := base64.URLEncoding.EncodeToString([]byte(key))
-		encodedValue := base64.URLEncoding.EncodeToString([]byte(value))
-		encodedData[encodedKey] = encodedValue
-	}
-	return json.Marshal(encodedData)
+func encode(text string) string {
+	base64Text := base64.URLEncoding.EncodeToString([]byte(text))
+
+	return base64Text
 }
 
-func decode(data *[]byte) (map[string]string, error) {
-	var jsonData map[string]string
-	if err := json.Unmarshal(*data, &jsonData); err != nil {
-		return nil, err
-	}
-	decodedData := map[string]string{}
-	for key, value := range jsonData {
+func decodeWhole(base64Data *map[string]string, decodedData *map[string]string) error {
+	base64DataRWMutex.RLock()
+	defer base64DataRWMutex.RUnlock()
+	dataRWMutex.Lock()
+	defer dataRWMutex.Unlock()
+	for key, value := range *base64Data {
 		decodedKey, err := base64.URLEncoding.DecodeString(key)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		decodedValue, err := base64.URLEncoding.DecodeString(value)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		decodedData[string(decodedKey)] = string(decodedValue)
+		(*decodedData)[string(decodedKey)] = string(decodedValue)
 	}
-	return decodedData, nil
+	return nil
 }
