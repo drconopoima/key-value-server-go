@@ -15,11 +15,20 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
+type dataVessel struct {
+	data  map[string]string
+	mutex sync.RWMutex
+}
+
 var (
-	data              = map[string]string{}
-	dataRWMutex       = sync.RWMutex{}
-	base64Data        = map[string]string{}
-	base64DataRWMutex = sync.RWMutex{}
+	data = dataVessel{
+		data:  map[string]string{},
+		mutex: sync.RWMutex{},
+	}
+	base64Data = dataVessel{
+		data:  map[string]string{},
+		mutex: sync.RWMutex{},
+	}
 )
 
 func main() {
@@ -95,31 +104,31 @@ func JSON(writer http.ResponseWriter, data interface{}) {
 
 // Get: Retrieve value at specified key
 func Get(context context.Context, key, dataFile string) (string, error) {
-	dataRWMutex.RLock()
-	defer dataRWMutex.RUnlock()
+	data.mutex.RLock()
+	defer data.mutex.RUnlock()
 
-	return data[key], nil
+	return data.data[key], nil
 }
 
 // Set: Establish a provided value for specified key
 func Set(context context.Context, key, value, dataFile string) error {
-	dataRWMutex.Lock()
-	defer dataRWMutex.Unlock()
-	data[key] = value
+	data.mutex.Lock()
+	defer data.mutex.Unlock()
+	data.data[key] = value
 	encodedKey := encode(key)
 	encodedValue := encode(value)
-	base64Data[encodedKey] = encodedValue
+	base64Data.data[encodedKey] = encodedValue
 
 	return nil
 }
 
 // Delete: Remove a provided key:value pair
 func Delete(context context.Context, key string, dataFile string) error {
-	dataRWMutex.Lock()
-	defer dataRWMutex.Unlock()
-	delete(data, key)
+	data.mutex.Lock()
+	defer data.mutex.Unlock()
+	delete(data.data, key)
 	base64Key := encode(key)
-	delete(base64Data, base64Key)
+	delete(base64Data.data, base64Key)
 	return nil
 }
 
@@ -132,10 +141,7 @@ func dataPath(storageDir string) string {
 	return filepath.Join(storageDir, "data.json")
 }
 
-func loadData(dataFile string, base64Data *map[string]string) error {
-	base64DataRWMutex.Lock()
-	defer base64DataRWMutex.Unlock()
-
+func loadData(dataFile string, base64Data *dataVessel) error {
 	// Check if the file exists or save empty data to create.
 	if _, err := os.Stat(dataFile); os.IsNotExist(err) {
 		return saveData(base64Data, dataFile)
@@ -146,15 +152,15 @@ func loadData(dataFile string, base64Data *map[string]string) error {
 		return err
 	}
 
+	base64Data.mutex.Lock()
+	defer base64Data.mutex.Unlock()
 	if err := json.Unmarshal(fileContents, base64Data); err != nil {
 		return err
 	}
 	return nil
 }
 
-func saveData(base64Data *map[string]string, dataFile string) error {
-	base64DataRWMutex.RLock()
-	defer base64DataRWMutex.RUnlock()
+func saveData(base64Data *dataVessel, dataFile string) error {
 	// Parent directory
 	parentDir := filepath.Dir(dataFile)
 	// Check if directory exists and create it if missing.
@@ -164,6 +170,8 @@ func saveData(base64Data *map[string]string, dataFile string) error {
 			return err
 		}
 	}
+	base64Data.mutex.RLock()
+	defer base64Data.mutex.RUnlock()
 	byteData, err := json.Marshal(base64Data)
 	if err != nil {
 		return err
@@ -173,16 +181,15 @@ func saveData(base64Data *map[string]string, dataFile string) error {
 
 func encode(text string) string {
 	base64Text := base64.URLEncoding.EncodeToString([]byte(text))
-
 	return base64Text
 }
 
-func decodeWhole(base64Data *map[string]string, decodedData *map[string]string) error {
-	base64DataRWMutex.RLock()
-	defer base64DataRWMutex.RUnlock()
-	dataRWMutex.Lock()
-	defer dataRWMutex.Unlock()
-	for key, value := range *base64Data {
+func decodeWhole(base64Data *dataVessel, data *dataVessel) error {
+	base64Data.mutex.RLock()
+	defer base64Data.mutex.RUnlock()
+	data.mutex.Lock()
+	defer data.mutex.Unlock()
+	for key, value := range base64Data.data {
 		decodedKey, err := base64.URLEncoding.DecodeString(key)
 		if err != nil {
 			return err
@@ -191,7 +198,7 @@ func decodeWhole(base64Data *map[string]string, decodedData *map[string]string) 
 		if err != nil {
 			return err
 		}
-		(*decodedData)[string(decodedKey)] = string(decodedValue)
+		(data.data)[string(decodedKey)] = string(decodedValue)
 	}
 	return nil
 }
