@@ -198,12 +198,13 @@ func saveData(base64Data *dataVessel, dataFile string) error {
 		fileMode = fileInfo.Mode()
 	}
 	// Write into temporary file
-	err = os.WriteFile(dataFile+".tmp", byteData, fileMode)
+	tmpDataFile := dataFile + ".tmp"
+	err = os.WriteFile(tmpDataFile, byteData, fileMode)
 	if err != nil {
 		return err
 	}
 	// Rename temporary file for atomicity
-	return os.Rename(dataFile+".tmp", dataFile)
+	return os.Rename(tmpDataFile, dataFile)
 }
 
 func encode(text string) string {
