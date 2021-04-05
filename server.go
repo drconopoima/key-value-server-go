@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -190,7 +191,20 @@ func saveData(base64Data *dataVessel, dataFile string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dataFile, byteData, 0644)
+	// Preserve existing permissions, default 0644
+	var fileMode fs.FileMode = 0644
+	fileInfo, err := os.Stat(dataFile)
+	if err == nil {
+		fileMode = fileInfo.Mode()
+	}
+	// Write into temporary file
+	tmpDataFile := dataFile + ".tmp"
+	err = os.WriteFile(tmpDataFile, byteData, fileMode)
+	if err != nil {
+		return err
+	}
+	// Rename temporary file for atomicity
+	return os.Rename(tmpDataFile, dataFile)
 }
 
 func encode(text string) string {
