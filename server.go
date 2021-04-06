@@ -163,7 +163,7 @@ func dataPath(storageDir string) string {
 func loadData(dataFile string, base64Data *dataVessel) error {
 	// Check if the file exists or save empty data to create.
 	if _, err := os.Stat(dataFile); os.IsNotExist(err) {
-		return saveData(dataFile)
+		return saveData(base64Data, dataFile)
 	}
 
 	fileContents, err := os.ReadFile(dataFile)
@@ -179,7 +179,7 @@ func loadData(dataFile string, base64Data *dataVessel) error {
 	return nil
 }
 
-func saveData(dataFile string) (err error) {
+func saveData(base64Data *dataVessel, dataFile string) (err error) {
 	// Parent directory
 	parentDir := filepath.Dir(dataFile)
 	dataFileName := filepath.Base(dataFile)
@@ -270,7 +270,7 @@ func decodeWhole(base64Data *dataVessel, data *dataVessel) error {
 	return nil
 }
 
-func schedule(interval time.Duration, saveData func(string) error, base64Data *dataVessel, dataFile string, quitChannel *chan bool) {
+func schedule(interval time.Duration, saveData func(*dataVessel, string) error, base64Data *dataVessel, dataFile string, quitChannel *chan bool) {
 	ticker := time.NewTicker(interval)
 	go func() {
 		for range ticker.C {
@@ -278,7 +278,7 @@ func schedule(interval time.Duration, saveData func(string) error, base64Data *d
 			case <-*quitChannel:
 				return
 			default:
-				saveData(dataFile)
+				saveData(base64Data, dataFile)
 			}
 		}
 	}()
