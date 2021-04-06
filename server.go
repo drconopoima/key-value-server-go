@@ -129,6 +129,8 @@ func Get(context context.Context, key, dataFile string) (string, error) {
 func Set(context context.Context, key, value, dataFile string) error {
 	data.mutex.Lock()
 	defer data.mutex.Unlock()
+	base64Data.mutex.Lock()
+	defer base64Data.mutex.Unlock()
 	data.data[key] = value
 	encodedKey := encode(key)
 	encodedValue := encode(value)
@@ -141,6 +143,8 @@ func Set(context context.Context, key, value, dataFile string) error {
 func Delete(context context.Context, key string, dataFile string) error {
 	data.mutex.Lock()
 	defer data.mutex.Unlock()
+	base64Data.mutex.Lock()
+	defer base64Data.mutex.Unlock()
 	delete(data.data, key)
 	base64Key := encode(key)
 	delete(base64Data.data, base64Key)
@@ -176,17 +180,6 @@ func loadData(dataFile string, base64Data *dataVessel) error {
 }
 
 func saveData(dataFile string) (err error) {
-	// Copy value for safe concurrency alongside server
-	base64Data.mutex.RLock()
-	defer base64Data.mutex.RUnlock()
-	var base64Copy dataVessel
-	base64Copy.data = map[string]string{}
-	base64Copy.mutex = sync.RWMutex{}
-	base64Copy.mutex.Lock()
-	defer base64Copy.mutex.Unlock()
-	for key, value := range base64Data.data {
-		base64Copy.data[key] = value
-	}
 	// Parent directory
 	parentDir := filepath.Dir(dataFile)
 	dataFileName := filepath.Base(dataFile)
@@ -210,10 +203,10 @@ func saveData(dataFile string) (err error) {
 		return
 	}
 	tmpFileName := tmpFile.Name()
-	base64Copy.mutex.RLock()
-	byteData, err := json.Marshal(base64Copy.data)
+	base64Data.mutex.RLock()
+	byteData, err := json.Marshal(base64Data.data)
+	base64Data.mutex.RUnlock()
 	if err != nil {
-		defer base64Copy.mutex.RUnlock()
 		return
 	}
 	defer func() {
@@ -233,7 +226,6 @@ func saveData(dataFile string) (err error) {
 				err = removeErr
 			}
 		}
-		defer base64Copy.mutex.RUnlock()
 	}()
 	chmodErr := tmpFile.Chmod(fileMode)
 	if chmodErr != nil {
@@ -279,9 +271,7 @@ func decodeWhole(base64Data *dataVessel, data *dataVessel) error {
 }
 
 func schedule(interval time.Duration, saveData func(string) error, base64Data *dataVessel, dataFile string, quitChannel *chan bool) {
-
 	ticker := time.NewTicker(interval)
-
 	go func() {
 		for range ticker.C {
 			select {
