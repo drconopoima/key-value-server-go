@@ -107,9 +107,9 @@ func main() {
 }
 
 // JSON: Encode and write json data to the HTTP response
-func JSON(writer http.ResponseWriter, data interface{}) {
+func JSON(writer http.ResponseWriter, dataJson interface{}) {
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-	jsonBytes, err := json.Marshal(data)
+	jsonBytes, err := json.Marshal(dataJson)
 	if err != nil {
 		writer.WriteHeader(http.StatusInternalServerError)
 		JSON(writer, map[string]string{"error": err.Error()})
@@ -159,7 +159,7 @@ func dataPath(storageDir string) string {
 func loadData(dataFile string, base64Data *dataVessel) error {
 	// Check if the file exists or save empty data to create.
 	if _, err := os.Stat(dataFile); os.IsNotExist(err) {
-		return saveData(base64Data, dataFile)
+		return saveData(dataFile)
 	}
 
 	fileContents, err := os.ReadFile(dataFile)
@@ -175,36 +175,83 @@ func loadData(dataFile string, base64Data *dataVessel) error {
 	return nil
 }
 
-func saveData(base64Data *dataVessel, dataFile string) error {
-	// Parent directory
-	parentDir := filepath.Dir(dataFile)
-	// Check if directory exists and create it if missing.
-	if _, err := os.Stat(parentDir); os.IsNotExist(err) {
-		err = os.MkdirAll(parentDir, 0755)
-		if err != nil {
-			return err
-		}
-	}
+func saveData(dataFile string) (err error) {
+	// Copy value for safe concurrency alongside server
 	base64Data.mutex.RLock()
 	defer base64Data.mutex.RUnlock()
-	byteData, err := json.Marshal(base64Data.data)
-	if err != nil {
-		return err
+	var base64Copy dataVessel
+	base64Copy.data = map[string]string{}
+	base64Copy.mutex = sync.RWMutex{}
+	base64Copy.mutex.Lock()
+	defer base64Copy.mutex.Unlock()
+	for key, value := range base64Data.data {
+		base64Copy.data[key] = value
+	}
+	// Parent directory
+	parentDir := filepath.Dir(dataFile)
+	dataFileName := filepath.Base(dataFile)
+	// Check if directory exists and create it if missing.
+	if _, err = os.Stat(parentDir); os.IsNotExist(err) {
+		err = os.MkdirAll(parentDir, 0755)
+		if err != nil {
+			return
+		}
 	}
 	// Preserve existing permissions, default 0644
 	var fileMode fs.FileMode = 0644
 	fileInfo, err := os.Stat(dataFile)
 	if err == nil {
-		fileMode = fileInfo.Mode()
+		fileMode = fileInfo.Mode().Perm()
 	}
 	// Write into temporary file
-	tmpDataFile := dataFile + ".tmp"
-	err = os.WriteFile(tmpDataFile, byteData, fileMode)
+	tmpDataFilePattern := dataFileName + "*.tmp"
+	tmpFile, err := os.CreateTemp(parentDir, tmpDataFilePattern)
 	if err != nil {
-		return err
+		return
+	}
+	tmpFileName := tmpFile.Name()
+	base64Copy.mutex.RLock()
+	byteData, err := json.Marshal(base64Copy.data)
+	if err != nil {
+		defer base64Copy.mutex.RUnlock()
+		return
+	}
+	defer func() {
+		// Catch error in file close
+		// Reference: https://www.joeshaw.org/dont-defer-close-on-writable-files/
+		closeErr := tmpFile.Close()
+		if err == nil {
+			err = closeErr
+		}
+		// Ensure the Temporary file is cleared
+		// Most of the time throws warning because it was successfully renamed already
+		// Left for clean-up if the rename step failed
+		removeErr := os.Remove(tmpFileName)
+		if removeErr != nil {
+			log.Println("[Info] Could not remove temporary file", tmpFileName, ". Error:", removeErr.Error())
+			if err == nil {
+				err = removeErr
+			}
+		}
+		defer base64Copy.mutex.RUnlock()
+	}()
+	chmodErr := tmpFile.Chmod(fileMode)
+	if chmodErr != nil {
+		newFileStat, _ := tmpFile.Stat()
+		newFileMode := newFileStat.Mode()
+		log.Println("[Warning] Could not preserve original file permissions on", tmpFileName, "of ", fileMode, ". New file permissions: ", newFileMode, ". Error: ", chmodErr.Error())
+	}
+	_, err = tmpFile.Write(byteData)
+	if err != nil {
+		return
+	}
+	err = tmpFile.Sync()
+	if err != nil {
+		return
 	}
 	// Rename temporary file for atomicity
-	return os.Rename(tmpDataFile, dataFile)
+	err = os.Rename(tmpFileName, dataFile)
+	return
 }
 
 func encode(text string) string {
@@ -231,7 +278,8 @@ func decodeWhole(base64Data *dataVessel, data *dataVessel) error {
 	return nil
 }
 
-func schedule(interval time.Duration, saveData func(*dataVessel, string) error, base64Data *dataVessel, dataFile string, quitChannel *chan bool) {
+func schedule(interval time.Duration, saveData func(string) error, base64Data *dataVessel, dataFile string, quitChannel *chan bool) {
+
 	ticker := time.NewTicker(interval)
 
 	go func() {
@@ -240,7 +288,7 @@ func schedule(interval time.Duration, saveData func(*dataVessel, string) error, 
 			case <-*quitChannel:
 				return
 			default:
-				saveData(base64Data, dataFile)
+				saveData(dataFile)
 			}
 		}
 	}()
