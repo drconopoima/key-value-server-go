@@ -107,9 +107,9 @@ func main() {
 }
 
 // JSON: Encode and write json data to the HTTP response
-func JSON(writer http.ResponseWriter, data interface{}) {
+func JSON(writer http.ResponseWriter, dataJson interface{}) {
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-	jsonBytes, err := json.Marshal(data)
+	jsonBytes, err := json.Marshal(dataJson)
 	if err != nil {
 		writer.WriteHeader(http.StatusInternalServerError)
 		JSON(writer, map[string]string{"error": err.Error()})
@@ -129,6 +129,8 @@ func Get(context context.Context, key, dataFile string) (string, error) {
 func Set(context context.Context, key, value, dataFile string) error {
 	data.mutex.Lock()
 	defer data.mutex.Unlock()
+	base64Data.mutex.Lock()
+	defer base64Data.mutex.Unlock()
 	data.data[key] = value
 	encodedKey := encode(key)
 	encodedValue := encode(value)
@@ -141,6 +143,8 @@ func Set(context context.Context, key, value, dataFile string) error {
 func Delete(context context.Context, key string, dataFile string) error {
 	data.mutex.Lock()
 	defer data.mutex.Unlock()
+	base64Data.mutex.Lock()
+	defer base64Data.mutex.Unlock()
 	delete(data.data, key)
 	base64Key := encode(key)
 	delete(base64Data.data, base64Key)
@@ -175,36 +179,71 @@ func loadData(dataFile string, base64Data *dataVessel) error {
 	return nil
 }
 
-func saveData(base64Data *dataVessel, dataFile string) error {
+func saveData(base64Data *dataVessel, dataFile string) (err error) {
 	// Parent directory
 	parentDir := filepath.Dir(dataFile)
+	dataFileName := filepath.Base(dataFile)
 	// Check if directory exists and create it if missing.
-	if _, err := os.Stat(parentDir); os.IsNotExist(err) {
+	if _, err = os.Stat(parentDir); os.IsNotExist(err) {
 		err = os.MkdirAll(parentDir, 0755)
 		if err != nil {
-			return err
+			return
 		}
-	}
-	base64Data.mutex.RLock()
-	defer base64Data.mutex.RUnlock()
-	byteData, err := json.Marshal(base64Data.data)
-	if err != nil {
-		return err
 	}
 	// Preserve existing permissions, default 0644
 	var fileMode fs.FileMode = 0644
 	fileInfo, err := os.Stat(dataFile)
 	if err == nil {
-		fileMode = fileInfo.Mode()
+		fileMode = fileInfo.Mode().Perm()
 	}
 	// Write into temporary file
-	tmpDataFile := dataFile + ".tmp"
-	err = os.WriteFile(tmpDataFile, byteData, fileMode)
+	tmpDataFilePattern := dataFileName + "*.tmp"
+	tmpFile, err := os.CreateTemp(parentDir, tmpDataFilePattern)
 	if err != nil {
-		return err
+		return
+	}
+	tmpFileName := tmpFile.Name()
+	base64Data.mutex.RLock()
+	byteData, err := json.Marshal(base64Data.data)
+	base64Data.mutex.RUnlock()
+	if err != nil {
+		return
+	}
+	defer func() {
+		// Catch error in file close
+		// Reference: https://www.joeshaw.org/dont-defer-close-on-writable-files/
+		closeErr := tmpFile.Close()
+		if err == nil {
+			err = closeErr
+		}
+		// Ensure the Temporary file is cleared
+		// Most of the time throws warning because it was successfully renamed already
+		// Left for clean-up if the rename step failed
+		removeErr := os.Remove(tmpFileName)
+		if removeErr != nil {
+			log.Println("[Info] Could not remove temporary file", tmpFileName, ". Error:", removeErr.Error())
+			if err == nil {
+				err = removeErr
+			}
+		}
+	}()
+	chmodErr := tmpFile.Chmod(fileMode)
+	if chmodErr != nil {
+		newFileStat, _ := tmpFile.Stat()
+		newFileMode := newFileStat.Mode()
+		log.Println("[Warning] Could not preserve original file permissions on", tmpFileName, "of ", fileMode, ". New file permissions: ", newFileMode, ". Error: ", chmodErr.Error())
+	}
+	_, err = tmpFile.Write(byteData)
+	if err != nil {
+		return
+	}
+	err = tmpFile.Sync()
+	if err != nil {
+		return
 	}
 	// Rename temporary file for atomicity
-	return os.Rename(tmpDataFile, dataFile)
+	err = os.Rename(tmpFileName, dataFile)
+	return
 }
 
 func encode(text string) string {
@@ -233,7 +272,6 @@ func decodeWhole(base64Data *dataVessel, data *dataVessel) error {
 
 func schedule(interval time.Duration, saveData func(*dataVessel, string) error, base64Data *dataVessel, dataFile string, quitChannel *chan bool) {
 	ticker := time.NewTicker(interval)
-
 	go func() {
 		for range ticker.C {
 			select {
