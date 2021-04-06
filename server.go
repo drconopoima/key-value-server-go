@@ -49,6 +49,7 @@ func main() {
 	if err != nil {
 		log.Println("[Warning] Could not load data file", dataFile, err.Error())
 	}
+	err = decodeWhole(&base64Data, &data)
 	// Interval between saves to disk
 	saveInterval := 60
 	if saveIntervalFromEnv := os.Getenv("SAVE_INTERVAL"); saveIntervalFromEnv != "" {
@@ -61,7 +62,6 @@ func main() {
 	}
 	var quitChannel chan bool
 	schedule(time.Duration(saveInterval)*time.Second, saveData, &base64Data, dataFile, &quitChannel)
-	err = decodeWhole(&base64Data, &data)
 	if err != nil {
 		log.Println("[Warning] Could not decode base64 data from file", err.Error())
 	}
@@ -128,26 +128,26 @@ func Get(context context.Context, key, dataFile string) (string, error) {
 // Set: Establish a provided value for specified key
 func Set(context context.Context, key, value, dataFile string) error {
 	data.mutex.Lock()
-	defer data.mutex.Unlock()
-	base64Data.mutex.Lock()
-	defer base64Data.mutex.Unlock()
 	data.data[key] = value
+	data.mutex.Unlock()
 	encodedKey := encode(key)
 	encodedValue := encode(value)
-	base64Data.data[encodedKey] = encodedValue
 
+	base64Data.mutex.Lock()
+	base64Data.data[encodedKey] = encodedValue
+	base64Data.mutex.Unlock()
 	return nil
 }
 
 // Delete: Remove a provided key:value pair
 func Delete(context context.Context, key string, dataFile string) error {
 	data.mutex.Lock()
-	defer data.mutex.Unlock()
-	base64Data.mutex.Lock()
-	defer base64Data.mutex.Unlock()
 	delete(data.data, key)
+	data.mutex.Unlock()
 	base64Key := encode(key)
+	base64Data.mutex.Lock()
 	delete(base64Data.data, base64Key)
+	base64Data.mutex.Unlock()
 	return nil
 }
 
