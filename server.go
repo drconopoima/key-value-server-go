@@ -45,11 +45,10 @@ func main() {
 	storageDir := os.Getenv("STORAGE_DIR")
 	dataFile := dataPath(storageDir)
 	// Load data from file
-	err := loadData(dataFile, &base64Data)
+	err := loadData(dataFile, &base64Data, &data)
 	if err != nil {
 		log.Printf("[Warning] Could not load data file %v. Error: %v", dataFile, err)
 	}
-	err = decodeWhole(&base64Data, &data)
 	// Interval between saves to disk
 	saveInterval := 60
 	if saveIntervalFromEnv := os.Getenv("SAVE_INTERVAL"); saveIntervalFromEnv != "" {
@@ -62,14 +61,11 @@ func main() {
 	}
 	var quitChannel chan bool
 	schedule(time.Duration(saveInterval)*time.Second, saveData, &base64Data, dataFile, &quitChannel)
-	if err != nil {
-		log.Printf("[Warning] Could not decode base64 data from file %v. Error: %v", dataFile, err)
-	}
 	router := chi.NewRouter()
 	router.Use(middleware.Logger)
 	router.Get("/key/{key}", func(writerGet http.ResponseWriter, requestGet *http.Request) {
 		key := chi.URLParam(requestGet, "key")
-		dataGet, err := Get(requestGet.Context(), key, dataFile)
+		dataGet, err := Get(requestGet.Context(), key)
 		if err != nil {
 			writerGet.WriteHeader(http.StatusInternalServerError)
 			JSON(writerGet, map[string]string{"error": err.Error()})
@@ -79,7 +75,7 @@ func main() {
 	})
 	router.Delete("/key/{key}", func(writerDelete http.ResponseWriter, requestDelete *http.Request) {
 		key := chi.URLParam(requestDelete, "key")
-		err := Delete(requestDelete.Context(), key, dataFile)
+		err := Delete(requestDelete.Context(), key)
 		if err != nil {
 			writerDelete.WriteHeader(http.StatusInternalServerError)
 			JSON(writerDelete, map[string]string{"error": err.Error()})
@@ -95,7 +91,7 @@ func main() {
 			JSON(writerSet, map[string]string{"error": err.Error()})
 			return
 		}
-		err = Set(requestSet.Context(), key, string(body), dataFile)
+		err = Set(requestSet.Context(), key, string(body))
 		if err != nil {
 			writerSet.WriteHeader(http.StatusInternalServerError)
 			JSON(writerSet, map[string]string{"error": err.Error()})
@@ -118,7 +114,7 @@ func JSON(writer http.ResponseWriter, dataJson interface{}) {
 }
 
 // Get: Retrieve value at specified key
-func Get(context context.Context, key, dataFile string) (string, error) {
+func Get(context context.Context, key string) (string, error) {
 	data.mutex.RLock()
 	defer data.mutex.RUnlock()
 
@@ -126,7 +122,7 @@ func Get(context context.Context, key, dataFile string) (string, error) {
 }
 
 // Set: Establish a provided value for specified key
-func Set(context context.Context, key, value, dataFile string) error {
+func Set(context context.Context, key, value string) error {
 	data.mutex.Lock()
 	data.data[key] = value
 	data.mutex.Unlock()
@@ -140,7 +136,7 @@ func Set(context context.Context, key, value, dataFile string) error {
 }
 
 // Delete: Remove a provided key:value pair
-func Delete(context context.Context, key string, dataFile string) error {
+func Delete(context context.Context, key string) error {
 	data.mutex.Lock()
 	delete(data.data, key)
 	data.mutex.Unlock()
@@ -160,7 +156,7 @@ func dataPath(storageDir string) string {
 	return filepath.Join(storageDir, "data.json")
 }
 
-func loadData(dataFile string, base64Data *dataVessel) error {
+func loadData(dataFile string, base64Data, data *dataVessel) error {
 	// Check if the file exists or save empty data to create.
 	if _, err := os.Stat(dataFile); os.IsNotExist(err) {
 		return saveData(base64Data, dataFile)
@@ -172,8 +168,14 @@ func loadData(dataFile string, base64Data *dataVessel) error {
 	}
 
 	base64Data.mutex.Lock()
-	defer base64Data.mutex.Unlock()
 	if err := json.Unmarshal(fileContents, &base64Data.data); err != nil {
+		base64Data.mutex.Unlock()
+		return err
+	}
+	base64Data.mutex.Unlock()
+	err = decodeWhole(base64Data, data)
+	if err != nil {
+		log.Printf("[Warning] Could not decode base64 data from file %v. Error: %v", dataFile, err)
 		return err
 	}
 	return nil
