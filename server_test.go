@@ -52,21 +52,37 @@ func TestJSON(test *testing.T) {
 func TestGet(test *testing.T) {
 	makeStorage(test)
 	defer cleanupStorage(test)
-	key := "key"
-	value := "value"
-	encodedKey := base64.URLEncoding.EncodeToString([]byte(key))
-	encodedValue := base64.URLEncoding.EncodeToString([]byte(value))
-	fileContents, _ := json.Marshal(map[string]string{encodedKey: encodedValue})
+	keyValueStore := map[string]string{
+		"key1": "value1",
+		"key3": "value3",
+	}
+	base64EncodedStore := map[string]string{}
+	for key, value := range keyValueStore {
+		encodedKey := base64.URLEncoding.EncodeToString([]byte(key))
+		encodedValue := base64.URLEncoding.EncodeToString([]byte(value))
+		base64EncodedStore[encodedKey] = encodedValue
+	}
+	fileContents, _ := json.Marshal(base64EncodedStore)
 	dataFileName := directoryName + "/data.json"
-
 	os.WriteFile(dataFileName, fileContents, 0644)
 	loadData(dataFileName, &base64Data, &data)
-	got, err := Get(context.Background(), key)
-	if err != nil {
-		test.Errorf("Unexpected error: %v", err)
+	testCases := []struct {
+		key   string
+		value string
+		err   error
+	}{
+		{"key1", keyValueStore["key1"], nil},
+		{"key2", keyValueStore["key2"], nil},
+		{"key3", keyValueStore["key3"], nil},
 	}
-	if got != value {
-		test.Errorf("Output: %v, expected: %v", got, value)
+	for _, testCase := range testCases {
+		valueGot, err := Get(context.Background(), testCase.key)
+		if err != testCase.err {
+			test.Errorf("Unexpected error: %v, expected: %v", err, testCase.err)
+		}
+		if valueGot != testCase.value {
+			test.Errorf("Output: %v, expected: %v", valueGot, testCase.value)
+		}
 	}
 }
 
