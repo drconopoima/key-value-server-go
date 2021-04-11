@@ -168,11 +168,12 @@ func loadData(dataFile string, base64Data, data *dataVessel) error {
 	}
 
 	base64Data.mutex.Lock()
-	if err := json.Unmarshal(fileContents, &base64Data.data); err != nil {
-		base64Data.mutex.Unlock()
+	err = json.Unmarshal(fileContents, &base64Data.data)
+	base64Data.mutex.Unlock()
+	if err != nil {
 		return err
 	}
-	base64Data.mutex.Unlock()
+
 	err = decodeWhole(base64Data, data)
 	if err != nil {
 		log.Printf("[Warning] Could not decode base64 data from file %v. Error: %v", dataFile, err)
