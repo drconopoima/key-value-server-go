@@ -40,14 +40,14 @@ func main() {
 	if portFromEnv := os.Getenv("PORT"); portFromEnv != "" {
 		port = portFromEnv
 	}
-	log.Printf("Starting up server on http://localhost:%s", port)
+	log.Printf("Starting up server on http://localhost:%v", port)
 	// Get persistence file from STORAGE_DIR environment variable
 	storageDir := os.Getenv("STORAGE_DIR")
 	dataFile := dataPath(storageDir)
 	// Load data from file
 	err := loadData(dataFile, &base64Data)
 	if err != nil {
-		log.Println("[Warning] Could not load data file", dataFile, err.Error())
+		log.Printf("[Warning] Could not load data file %v. Error: %v", dataFile, err)
 	}
 	err = decodeWhole(&base64Data, &data)
 	// Interval between saves to disk
@@ -55,7 +55,7 @@ func main() {
 	if saveIntervalFromEnv := os.Getenv("SAVE_INTERVAL"); saveIntervalFromEnv != "" {
 		saveIntervalTry, err := strconv.Atoi(saveIntervalFromEnv)
 		if err != nil {
-			log.Println("[Warning] Could not use environment SAVE_INTERVAL of", saveIntervalFromEnv, ", got error:", err.Error(), "using default value of ", saveInterval)
+			log.Printf("[Warning] Could not use environment value SAVE_INTERVAL %v, got error: %v. Using default value of %d", saveIntervalFromEnv, err, saveInterval)
 		} else {
 			saveInterval = saveIntervalTry
 		}
@@ -63,7 +63,7 @@ func main() {
 	var quitChannel chan bool
 	schedule(time.Duration(saveInterval)*time.Second, saveData, &base64Data, dataFile, &quitChannel)
 	if err != nil {
-		log.Println("[Warning] Could not decode base64 data from file", err.Error())
+		log.Printf("[Warning] Could not decode base64 data from file %v. Error: %v", dataFile, err)
 	}
 	router := chi.NewRouter()
 	router.Use(middleware.Logger)
@@ -221,7 +221,7 @@ func saveData(base64Data *dataVessel, dataFile string) (err error) {
 		// Left for clean-up if the rename step failed
 		removeErr := os.Remove(tmpFileName)
 		if removeErr != nil {
-			log.Println("[Info] Could not remove temporary file", tmpFileName, ". Error:", removeErr.Error())
+			log.Printf("[Info] Could not remove temporary file from %v. Error: %v", tmpFileName, removeErr)
 			if err == nil {
 				err = removeErr
 			}
@@ -231,7 +231,7 @@ func saveData(base64Data *dataVessel, dataFile string) (err error) {
 	if chmodErr != nil {
 		newFileStat, _ := tmpFile.Stat()
 		newFileMode := newFileStat.Mode()
-		log.Println("[Warning] Could not preserve original file permissions on", tmpFileName, "of ", fileMode, ". New file permissions: ", newFileMode, ". Error: ", chmodErr.Error())
+		log.Printf("[Warning] Could not preserve original file permissions of %v on %v. New file permissions: %v. Error: %v", fileMode, tmpFileName, newFileMode, chmodErr)
 	}
 	_, err = tmpFile.Write(byteData)
 	if err != nil {
