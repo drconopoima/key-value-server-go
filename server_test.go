@@ -14,6 +14,7 @@ import (
 var directoryName string = "testdata"
 
 func TestJSON(test *testing.T) {
+	test.Parallel()
 	header := http.Header{}
 	headerKey := "Content-Type"
 	headerValue := "application/json; charset=utf-8"
@@ -50,6 +51,7 @@ func TestJSON(test *testing.T) {
 }
 
 func TestGet(test *testing.T) {
+	test.Parallel()
 	makeStorage(test)
 	defer cleanupStorage(test)
 	keyValueStore := map[string]string{
