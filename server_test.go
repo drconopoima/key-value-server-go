@@ -52,8 +52,6 @@ func TestJSON(test *testing.T) {
 
 func TestGet(test *testing.T) {
 	test.Parallel()
-	makeStorage(test)
-	defer cleanupStorage(test)
 	keyValueStore := map[string]string{
 		"key1": "value1",
 		"key3": "value3",
@@ -64,10 +62,10 @@ func TestGet(test *testing.T) {
 		encodedValue := base64.URLEncoding.EncodeToString([]byte(value))
 		base64EncodedStore[encodedKey] = encodedValue
 	}
-	fileContents, _ := json.Marshal(base64EncodedStore)
-	dataFileName := directoryName + "/data.json"
-	os.WriteFile(dataFileName, fileContents, 0644)
-	loadData(dataFileName, &base64Data, &data)
+	err := callLoadData(test, &base64EncodedStore)
+	if err != nil {
+		test.Fatalf("Couldn't load test data from file %v. Error: %v", directoryName+"/data.json", err)
+	}
 	testCases := []struct {
 		key   string
 		value string
@@ -88,16 +86,38 @@ func TestGet(test *testing.T) {
 	}
 }
 
-func makeStorage(test *testing.T) {
+func makeStorage(testbench testing.TB) {
 	err := os.Mkdir(directoryName, 0755)
 	if err != nil {
-		test.Logf("Couldn't create directory '%v'. %v", directoryName, err)
+		testbench.Logf("Couldn't create directory '%v'. %v", directoryName, err)
 	}
 }
 
-func cleanupStorage(test *testing.T) {
+func cleanupStorage(testbench testing.TB) {
 	err := os.RemoveAll(directoryName)
 	if err != nil {
-		test.Fatalf("Failed to delete directory '%v'. %v", directoryName, err)
+		testbench.Fatalf("Failed to delete directory '%v'. %v", directoryName, err)
+	}
+}
+
+func callLoadData(testbench testing.TB, base64EncodedStore *map[string]string) error {
+	makeStorage(testbench)
+	defer cleanupStorage(testbench)
+	fileContents, err := json.Marshal(base64EncodedStore)
+	if err != nil {
+		return err
+	}
+	dataFileName := directoryName + "/data.json"
+	err = os.WriteFile(dataFileName, fileContents, 0644)
+	if err != nil {
+		return err
+	}
+	return loadData(dataFileName, &base64Data, &data)
+}
+
+func BenchmarkGet(bench *testing.B) {
+	bench.ResetTimer()
+	for i := 0; i < bench.N; i++ {
+		Get(context.Background(), "key1")
 	}
 }
