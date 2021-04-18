@@ -116,9 +116,10 @@ func JSON(writer http.ResponseWriter, dataJson interface{}) {
 // Get: Retrieve value at specified key
 func Get(context context.Context, key string) (string, error) {
 	data.mutex.RLock()
-	defer data.mutex.RUnlock()
+	value := data.data[key]
+	data.mutex.RUnlock()
 
-	return data.data[key], nil
+	return value, nil
 }
 
 // Set: Establish a provided value for specified key
@@ -257,8 +258,6 @@ func encode(text string) string {
 func decodeWhole(base64Data *dataVessel, data *dataVessel) error {
 	base64Data.mutex.RLock()
 	defer base64Data.mutex.RUnlock()
-	data.mutex.Lock()
-	defer data.mutex.Unlock()
 	for key, value := range base64Data.data {
 		decodedKey, err := base64.URLEncoding.DecodeString(key)
 		if err != nil {
@@ -268,7 +267,9 @@ func decodeWhole(base64Data *dataVessel, data *dataVessel) error {
 		if err != nil {
 			return err
 		}
+		data.mutex.Lock()
 		(data.data)[string(decodedKey)] = string(decodedValue)
+		data.mutex.Unlock()
 	}
 	return nil
 }
