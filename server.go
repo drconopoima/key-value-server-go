@@ -11,12 +11,20 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	cmap "github.com/orcaman/concurrent-map"
 )
+
+// Job holds the attributes needed to decode.
+type Job struct {
+	key       string
+	value     string
+	waitGroup *sync.WaitGroup
+}
 
 var (
 	data       = cmap.New()
@@ -144,7 +152,7 @@ func loadData(dataFile string, base64Data, data *cmap.ConcurrentMap) error {
 		return err
 	}
 
-	err = decodeWhole(base64DataMap, base64Data, data)
+	err = decodeWhole(&base64DataMap, base64Data, data)
 	if err != nil {
 		log.Printf("[Warning] Could not decode base64 data from file %v. Error: %v", dataFile, err)
 		return err
@@ -223,19 +231,42 @@ func encode(text string) string {
 	return base64Text
 }
 
-func decodeWhole(base64DataMap map[string]string, base64Data *cmap.ConcurrentMap, data *cmap.ConcurrentMap) error {
-	for key, value := range base64DataMap {
-		base64Data.Set(key, value)
-		decodedKey, err := base64.URLEncoding.DecodeString(key)
-		if err != nil {
-			return err
-		}
-		decodedValue, err := base64.URLEncoding.DecodeString(value)
-		if err != nil {
-			return err
-		}
-		data.Set(string(decodedKey), string(decodedValue))
+func decodeWhole(base64DataMap *map[string]string, base64Data *cmap.ConcurrentMap, data *cmap.ConcurrentMap) error {
+	waitGroup := sync.WaitGroup{}
+	waitGroup.Add(1)
+	var quitChannel chan bool
+	// make a channel with a capacity of 64.
+	jobChan := make(chan Job, 64)
+	go enqueue(jobChan, &quitChannel)
+	for key, value := range *base64DataMap {
+		jobChan <- Job{key, value, &waitGroup}
 	}
+
+	waitGroup.Wait()
+	return nil
+}
+
+func enqueue(jobChan <-chan Job, quitChannel *chan bool) {
+	select {
+	case job := <-jobChan:
+		decodeWorker(job.key, job.value, job.waitGroup)
+	case <-*quitChannel:
+		return
+	}
+}
+
+func decodeWorker(key, value string, wg *sync.WaitGroup) error {
+	defer wg.Done()
+	base64Data.Set(key, value)
+	decodedKey, err := base64.URLEncoding.DecodeString(key)
+	if err != nil {
+		return err
+	}
+	decodedValue, err := base64.URLEncoding.DecodeString(value)
+	if err != nil {
+		return err
+	}
+	data.Set(string(decodedKey), string(decodedValue))
 	return nil
 }
 
