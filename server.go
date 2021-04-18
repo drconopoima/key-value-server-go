@@ -11,12 +11,20 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	cmap "github.com/orcaman/concurrent-map"
 )
+
+// Job holds the attributes needed to decode.
+type Job struct {
+	key       string
+	value     string
+	waitGroup *sync.WaitGroup
+}
 
 var (
 	data       = cmap.New()
@@ -224,18 +232,28 @@ func encode(text string) string {
 }
 
 func decodeWhole(base64DataMap map[string]string, base64Data *cmap.ConcurrentMap, data *cmap.ConcurrentMap) error {
+	waitGroup := sync.WaitGroup{}
+
 	for key, value := range base64DataMap {
-		base64Data.Set(key, value)
-		decodedKey, err := base64.URLEncoding.DecodeString(key)
-		if err != nil {
-			return err
-		}
-		decodedValue, err := base64.URLEncoding.DecodeString(value)
-		if err != nil {
-			return err
-		}
-		data.Set(string(decodedKey), string(decodedValue))
+		waitGroup.Add(1)
+		go decodeWorker(key, value, &waitGroup)
 	}
+	waitGroup.Wait()
+	return nil
+}
+
+func decodeWorker(key, value string, wg *sync.WaitGroup) error {
+	defer wg.Done()
+	base64Data.Set(key, value)
+	decodedKey, err := base64.URLEncoding.DecodeString(key)
+	if err != nil {
+		return err
+	}
+	decodedValue, err := base64.URLEncoding.DecodeString(value)
+	if err != nil {
+		return err
+	}
+	data.Set(string(decodedKey), string(decodedValue))
 	return nil
 }
 
