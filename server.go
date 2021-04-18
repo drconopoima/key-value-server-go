@@ -116,9 +116,10 @@ func JSON(writer http.ResponseWriter, dataJson interface{}) {
 // Get: Retrieve value at specified key
 func Get(context context.Context, key string) (string, error) {
 	data.mutex.RLock()
-	defer data.mutex.RUnlock()
+	value := data.data[key]
+	data.mutex.RUnlock()
 
-	return data.data[key], nil
+	return value, nil
 }
 
 // Set: Establish a provided value for specified key
