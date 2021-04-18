@@ -90,21 +90,21 @@ func makeStorage(testbench testing.TB) {
 	}
 }
 
-func cleanupStorage(testbench testing.TB) {
-	err := os.RemoveAll(directoryName)
+func cleanupStorage(testbench testing.TB, filePath string) {
+	err := os.RemoveAll(filePath)
 	if err != nil {
-		testbench.Fatalf("Failed to delete directory '%v'. %v", directoryName, err)
+		testbench.Fatalf("Failed to delete path '%v'. %v", filePath, err)
 	}
 }
 
 func callLoadData(testbench testing.TB, base64EncodedStore *map[string]string) error {
 	makeStorage(testbench)
-	defer cleanupStorage(testbench)
+	dataFileName := directoryName + "/data.json"
+	defer cleanupStorage(testbench, dataFileName)
 	fileContents, err := json.Marshal(base64EncodedStore)
 	if err != nil {
 		return err
 	}
-	dataFileName := directoryName + "/data.json"
 	err = os.WriteFile(dataFileName, fileContents, 0644)
 	if err != nil {
 		return err

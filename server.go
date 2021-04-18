@@ -152,7 +152,7 @@ func loadData(dataFile string, base64Data, data *cmap.ConcurrentMap) error {
 		return err
 	}
 
-	err = decodeWhole(&base64DataMap, base64Data, data)
+	err = decodeWhole(base64DataMap, base64Data, data)
 	if err != nil {
 		log.Printf("[Warning] Could not decode base64 data from file %v. Error: %v", dataFile, err)
 		return err
@@ -231,28 +231,15 @@ func encode(text string) string {
 	return base64Text
 }
 
-func decodeWhole(base64DataMap *map[string]string, base64Data *cmap.ConcurrentMap, data *cmap.ConcurrentMap) error {
+func decodeWhole(base64DataMap map[string]string, base64Data *cmap.ConcurrentMap, data *cmap.ConcurrentMap) error {
 	waitGroup := sync.WaitGroup{}
-	waitGroup.Add(1)
-	var quitChannel chan bool
-	// make a channel with a capacity of 64.
-	jobChan := make(chan Job, 64)
-	go enqueue(jobChan, &quitChannel)
-	for key, value := range *base64DataMap {
-		jobChan <- Job{key, value, &waitGroup}
-	}
 
+	for key, value := range base64DataMap {
+		waitGroup.Add(1)
+		go decodeWorker(key, value, &waitGroup)
+	}
 	waitGroup.Wait()
 	return nil
-}
-
-func enqueue(jobChan <-chan Job, quitChannel *chan bool) {
-	select {
-	case job := <-jobChan:
-		decodeWorker(job.key, job.value, job.waitGroup)
-	case <-*quitChannel:
-		return
-	}
 }
 
 func decodeWorker(key, value string, wg *sync.WaitGroup) error {
