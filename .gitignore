@@ -16,3 +16,5 @@
 
 # binary
 key-value-server-go
+
+testdata/*.json
