@@ -11,27 +11,16 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	cmap "github.com/orcaman/concurrent-map"
 )
 
-type dataVessel struct {
-	data  map[string]string
-	mutex sync.RWMutex
-}
-
 var (
-	data = dataVessel{
-		data:  map[string]string{},
-		mutex: sync.RWMutex{},
-	}
-	base64Data = dataVessel{
-		data:  map[string]string{},
-		mutex: sync.RWMutex{},
-	}
+	data       = cmap.New()
+	base64Data = cmap.New()
 )
 
 func main() {
@@ -65,22 +54,14 @@ func main() {
 	router.Use(middleware.Logger)
 	router.Get("/key/{key}", func(writerGet http.ResponseWriter, requestGet *http.Request) {
 		key := chi.URLParam(requestGet, "key")
-		dataGet, err := Get(requestGet.Context(), key)
-		if err != nil {
-			writerGet.WriteHeader(http.StatusInternalServerError)
-			JSON(writerGet, map[string]string{"error": err.Error()})
-			return
-		}
+		dataGet := Get(requestGet.Context(), key)
+
 		JSON(writerGet, dataGet)
 	})
 	router.Delete("/key/{key}", func(writerDelete http.ResponseWriter, requestDelete *http.Request) {
 		key := chi.URLParam(requestDelete, "key")
-		err := Delete(requestDelete.Context(), key)
-		if err != nil {
-			writerDelete.WriteHeader(http.StatusInternalServerError)
-			JSON(writerDelete, map[string]string{"error": err.Error()})
-			return
-		}
+		Delete(requestDelete.Context(), key)
+
 		JSON(writerDelete, map[string]string{"status": "success"})
 	})
 	router.Post("/key/{key}", func(writerSet http.ResponseWriter, requestSet *http.Request) {
@@ -91,12 +72,8 @@ func main() {
 			JSON(writerSet, map[string]string{"error": err.Error()})
 			return
 		}
-		err = Set(requestSet.Context(), key, string(body))
-		if err != nil {
-			writerSet.WriteHeader(http.StatusInternalServerError)
-			JSON(writerSet, map[string]string{"error": err.Error()})
-			return
-		}
+		Set(requestSet.Context(), key, string(body))
+
 		JSON(writerSet, map[string]string{"status": "success"})
 	})
 	log.Fatal(http.ListenAndServe(":"+port, router))
@@ -114,38 +91,30 @@ func JSON(writer http.ResponseWriter, dataJson interface{}) {
 }
 
 // Get: Retrieve value at specified key
-func Get(context context.Context, key string) (string, error) {
-	data.mutex.RLock()
-	value := data.data[key]
-	data.mutex.RUnlock()
-
-	return value, nil
+func Get(context context.Context, key string) string {
+	valueInterface, ok := data.Get(key)
+	if !ok {
+		return ""
+	}
+	valueString, ok := valueInterface.(string)
+	return valueString
 }
 
 // Set: Establish a provided value for specified key
-func Set(context context.Context, key, value string) error {
-	data.mutex.Lock()
-	data.data[key] = value
-	data.mutex.Unlock()
+func Set(context context.Context, key, value string) {
+	data.Set(key, value)
 	encodedKey := encode(key)
 	encodedValue := encode(value)
 
-	base64Data.mutex.Lock()
-	base64Data.data[encodedKey] = encodedValue
-	base64Data.mutex.Unlock()
-	return nil
+	base64Data.Set(encodedKey, encodedValue)
+	return
 }
 
 // Delete: Remove a provided key:value pair
-func Delete(context context.Context, key string) error {
-	data.mutex.Lock()
-	delete(data.data, key)
-	data.mutex.Unlock()
+func Delete(context context.Context, key string) {
+	data.Remove(key)
 	base64Key := encode(key)
-	base64Data.mutex.Lock()
-	delete(base64Data.data, base64Key)
-	base64Data.mutex.Unlock()
-	return nil
+	base64Data.Remove(base64Key)
 }
 
 // dataPath: Return full path to file for data persistence storage from a directory
@@ -157,7 +126,7 @@ func dataPath(storageDir string) string {
 	return filepath.Join(storageDir, "data.json")
 }
 
-func loadData(dataFile string, base64Data, data *dataVessel) error {
+func loadData(dataFile string, base64Data, data *cmap.ConcurrentMap) error {
 	// Check if the file exists or save empty data to create.
 	if _, err := os.Stat(dataFile); os.IsNotExist(err) {
 		return saveData(base64Data, dataFile)
@@ -168,14 +137,14 @@ func loadData(dataFile string, base64Data, data *dataVessel) error {
 		return err
 	}
 
-	base64Data.mutex.Lock()
-	err = json.Unmarshal(fileContents, &base64Data.data)
-	base64Data.mutex.Unlock()
+	var base64DataMap map[string]string = map[string]string{}
+	err = json.Unmarshal(fileContents, &base64DataMap)
+
 	if err != nil {
 		return err
 	}
 
-	err = decodeWhole(base64Data, data)
+	err = decodeWhole(base64DataMap, base64Data, data)
 	if err != nil {
 		log.Printf("[Warning] Could not decode base64 data from file %v. Error: %v", dataFile, err)
 		return err
@@ -183,7 +152,7 @@ func loadData(dataFile string, base64Data, data *dataVessel) error {
 	return nil
 }
 
-func saveData(base64Data *dataVessel, dataFile string) (err error) {
+func saveData(base64Data *cmap.ConcurrentMap, dataFile string) (err error) {
 	// Parent directory
 	parentDir := filepath.Dir(dataFile)
 	dataFileName := filepath.Base(dataFile)
@@ -207,9 +176,8 @@ func saveData(base64Data *dataVessel, dataFile string) (err error) {
 		return
 	}
 	tmpFileName := tmpFile.Name()
-	base64Data.mutex.RLock()
-	byteData, err := json.Marshal(base64Data.data)
-	base64Data.mutex.RUnlock()
+
+	byteData, err := base64Data.MarshalJSON()
 	if err != nil {
 		return
 	}
@@ -255,12 +223,9 @@ func encode(text string) string {
 	return base64Text
 }
 
-func decodeWhole(base64Data *dataVessel, data *dataVessel) error {
-	base64Data.mutex.RLock()
-	defer base64Data.mutex.RUnlock()
-	data.mutex.Lock()
-	defer data.mutex.Unlock()
-	for key, value := range base64Data.data {
+func decodeWhole(base64DataMap map[string]string, base64Data *cmap.ConcurrentMap, data *cmap.ConcurrentMap) error {
+	for key, value := range base64DataMap {
+		base64Data.Set(key, value)
 		decodedKey, err := base64.URLEncoding.DecodeString(key)
 		if err != nil {
 			return err
@@ -269,12 +234,12 @@ func decodeWhole(base64Data *dataVessel, data *dataVessel) error {
 		if err != nil {
 			return err
 		}
-		(data.data)[string(decodedKey)] = string(decodedValue)
+		data.Set(string(decodedKey), string(decodedValue))
 	}
 	return nil
 }
 
-func schedule(interval time.Duration, saveData func(*dataVessel, string) error, base64Data *dataVessel, dataFile string, quitChannel *chan bool) {
+func schedule(interval time.Duration, saveData func(*cmap.ConcurrentMap, string) error, base64Data *cmap.ConcurrentMap, dataFile string, quitChannel *chan bool) {
 	ticker := time.NewTicker(interval)
 	go func() {
 		for range ticker.C {
