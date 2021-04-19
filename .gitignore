@@ -18,3 +18,4 @@
 key-value-server-go
 
 testdata/*.json
+testdata/*.json*.tmp
