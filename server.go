@@ -19,11 +19,9 @@ import (
 	cmap "github.com/orcaman/concurrent-map"
 )
 
-// Job holds the attributes needed to decode.
-type Job struct {
-	key       string
-	value     string
-	waitGroup *sync.WaitGroup
+type syncMap struct {
+	dataMap map[string]string
+	rwmutex sync.RWMutex
 }
 
 var (
@@ -145,14 +143,15 @@ func loadData(dataFile string, base64Data, data *cmap.ConcurrentMap) error {
 		return err
 	}
 
-	var base64DataMap map[string]string = map[string]string{}
-	err = json.Unmarshal(fileContents, &base64DataMap)
-
+	var base64DataMap syncMap = syncMap{map[string]string{}, sync.RWMutex{}}
+	base64DataMap.rwmutex.Lock()
+	err = json.Unmarshal(fileContents, &base64DataMap.dataMap)
+	base64DataMap.rwmutex.Unlock()
 	if err != nil {
 		return err
 	}
 
-	err = decodeWhole(base64DataMap, base64Data, data)
+	err = decodeWhole(&base64DataMap, base64Data, data)
 	if err != nil {
 		log.Printf("[Warning] Could not decode base64 data from file %v. Error: %v", dataFile, err)
 		return err
@@ -231,14 +230,16 @@ func encode(text string) string {
 	return base64Text
 }
 
-func decodeWhole(base64DataMap map[string]string, base64Data *cmap.ConcurrentMap, data *cmap.ConcurrentMap) error {
+func decodeWhole(base64DataMap *syncMap, base64Data *cmap.ConcurrentMap, data *cmap.ConcurrentMap) error {
 	waitGroup := sync.WaitGroup{}
 
-	for key, value := range base64DataMap {
+	base64DataMap.rwmutex.RLock()
+	for key, value := range base64DataMap.dataMap {
 		waitGroup.Add(1)
 		go decodeWorker(key, value, &waitGroup)
 	}
 	waitGroup.Wait()
+	base64DataMap.rwmutex.RUnlock()
 	return nil
 }
 
