@@ -50,11 +50,41 @@ func TestJSON(test *testing.T) {
 	}
 }
 
+func TestGetSetDelete(test *testing.T) {
+	test.Parallel()
+	key := "key"
+	value := "value"
+	base64EncodedStore := map[string]string{}
+	encodedKey := base64.URLEncoding.EncodeToString([]byte(key))
+	encodedValue := base64.URLEncoding.EncodeToString([]byte(value))
+	base64EncodedStore[encodedKey] = encodedValue
+	context := context.Background()
+	if output := Get(context, key); output != "" {
+		test.Fatalf("Unexpected result from calling Get on unset key '%v', output: '%v'", key, output)
+	}
+	dataFile := "dataGetSetDelete.json"
+	err := callLoadData(test, &base64EncodedStore, dataFile)
+	if err != nil {
+		test.Fatalf("Couldn't load test data from file %v. Error: %v", directoryName+"/data.json", err)
+	}
+	Set(context, key, value)
+	if output := Get(context, key); output != value {
+		test.Fatalf("Unexpected result from calling Get on key '%v', expected: '%v', received: '%v'", key, value, output)
+	}
+	Delete(context, key)
+	if output := Get(context, key); output != "" {
+		test.Fatalf("Unexpected result from calling Get on deleted key '%v', output: '%v'", key, output)
+	}
+}
+
 func TestGet(test *testing.T) {
 	test.Parallel()
+	key1 := "key1"
+	key2 := "key2"
+	key3 := "key3"
 	keyValueStore := map[string]string{
-		"key1": "value1",
-		"key3": "value3",
+		key1: "value1",
+		key3: "value3",
 	}
 	base64EncodedStore := map[string]string{}
 	for key, value := range keyValueStore {
@@ -62,7 +92,8 @@ func TestGet(test *testing.T) {
 		encodedValue := base64.URLEncoding.EncodeToString([]byte(value))
 		base64EncodedStore[encodedKey] = encodedValue
 	}
-	err := callLoadData(test, &base64EncodedStore)
+	dataFile := "dataGet.json"
+	err := callLoadData(test, &base64EncodedStore, dataFile)
 	if err != nil {
 		test.Fatalf("Couldn't load test data from file %v. Error: %v", directoryName+"/data.json", err)
 	}
@@ -71,9 +102,9 @@ func TestGet(test *testing.T) {
 		value string
 		err   error
 	}{
-		{"key1", keyValueStore["key1"], nil},
-		{"key2", keyValueStore["key2"], nil},
-		{"key3", keyValueStore["key3"], nil},
+		{key1, keyValueStore[key1], nil},
+		{key2, keyValueStore[key2], nil},
+		{key3, keyValueStore[key3], nil},
 	}
 	for _, testCase := range testCases {
 		valueGot := Get(context.Background(), testCase.key)
@@ -97,9 +128,9 @@ func cleanupStorage(testbench testing.TB, filePath string) {
 	}
 }
 
-func callLoadData(testbench testing.TB, base64EncodedStore *map[string]string) error {
+func callLoadData(testbench testing.TB, base64EncodedStore *map[string]string, fileName string) error {
 	makeStorage(testbench)
-	dataFileName := directoryName + "/data.json"
+	dataFileName := directoryName + fileName
 	defer cleanupStorage(testbench, dataFileName)
 	fileContents, err := json.Marshal(base64EncodedStore)
 	if err != nil {
