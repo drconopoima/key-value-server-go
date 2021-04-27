@@ -6,9 +6,9 @@
 package store
 
 import {
-	"fsm"
 	"os"
 	"sync"
+	cmap "github.com/orcaman/concurrent-map"
 	"github.com/hashicorp/raft"
 	raftboltdb "github.com/hashicorp/raft-boltdb"
 }
@@ -29,9 +29,12 @@ type Store struct {
 	RaftDirectory   string
 	RaftPort 	    string
 
-	rwminux         sync.RWMutex
+	rwmutex         sync.RWMutex
 
 	raft            *raft.Raft // The consensus mechanism
+
+	data            *cmap.ConcurrentMap
+	base64Data      *cmap.ConcurrentMap
 
 	logger          *log.Logger
 }
@@ -97,9 +100,31 @@ func NewRaftSetup(inMemory bool, localID, raftPort string, singleNode bool) erro
 	return nil
 }
 
-func (fsm *fsm) Set(ctx context.Context, key, value string) { }
+// Set: Establish a provided value for specified key
+func (fsm *fsm) Set(ctx context.Context, key, value string) {
+	fsm.data.Set(key, value)
+	encodedKey := encode(key)
+	encodedValue := encode(value)
 
-func (fsm *fsm) Get(ctx context.Context, key string) string { }
+	fsm.base64Data.Set(encodedKey, encodedValue)
+	return
+}
 
-func (fsm *fsm) Delete(ctx context.Context, key string) { }
+// Get: Retrieve value at specified key
+func (fsm *fsm) Get(ctx context.Context, key string) string {
+	valueInterface, ok := fsm.data.Get(key)
+	if !ok {
+		return ""
+	}
+	valueString, ok := valueInterface.(string)
+	return valueString
+}
+
+// Delete: Remove a provided key:value pair
+func (fsm *fsm) Delete(ctx context.Context, key string) { 
+	fsm.data.Remove(key)
+	base64Key := encode(key)
+	fsm.base64Data.Remove(base64Key)
+}
+
 
