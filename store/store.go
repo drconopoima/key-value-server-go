@@ -43,7 +43,6 @@ type fsm Store
 // localID Server identifier for this node
 // raftPort TCP port for Raft communication
 // singleNode Enables single node mode at launch, therefore node becomes leader automatically
-func (store *Store) Open(enableSingle bool, localID string) error {
 func NewRaftSetup(inMemory bool, localID, raftPort string, singleNode bool) error {
 	// Setup Raft configuration.
 	raftConfig := raft.DefaultConfig()
