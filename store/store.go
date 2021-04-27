@@ -7,16 +7,13 @@ package store
 
 import {
 	"os"
+	"path/filepath"
 	"sync"
+	"time"
 	cmap "github.com/orcaman/concurrent-map"
 	"github.com/hashicorp/raft"
 	raftboltdb "github.com/hashicorp/raft-boltdb"
 }
-
-const (
-	retainSnapshotCount = 2
-	raftTimeout         = 10 * time.Second
-)
 
 type command struct {
 	Action      string `json:"op,omitempty"`
@@ -25,28 +22,53 @@ type command struct {
 }
 
 type Store struct {
-	inMemory        bool
-	RaftDirectory   string
-	RaftPort 	    string
+	inMemory             bool
+	RaftDirectory        string
+	RaftPort       	     string
 
-	rwmutex         sync.RWMutex
+	rwmutex              sync.RWMutex
 
-	raft            *raft.Raft // The consensus mechanism
+	raft                 *raft.Raft // The consensus mechanism
 
-	data            *cmap.ConcurrentMap
-	base64Data      *cmap.ConcurrentMap
+	data                  *cmap.ConcurrentMap
+	base64Data            *cmap.ConcurrentMap
 
-	logger          *log.Logger
+	logger                 *log.Logger
+
+	retainSnapshotCount    int
+	raftTimeout			   time.Duration
 }
 
 type fsm Store
 
-// NewRaftSetup configures a raft server
+// New creates and returns a new Store instance by reference
 // inMemory Whether Raft algorithm stored in memory-only, without filesystem database storage
+
+func New(inMemory bool) (*Store) {
+	var store Store
+	return &Store{
+		inMemory:             inMemory,
+		RaftDirectory:        make(string),
+		RaftPort:             make(string),
+		rwmutex:              sync.RWMutex{},
+		raft:                 make(raft.Raft),
+		data:                 cmap.New(),
+	    base64Data:           cmap.New(),
+		logger: 	          log.New(os.Stderr, "[store] ", log.LstdFlags),
+		retainSnapshotCount:  make(int),
+		raftTimeout: 		  make(time.Duration)
+	}
+}
+
+// NewRaftSetup configures a raft server
 // localID Server identifier for this node
 // raftPort TCP port for Raft communication
 // singleNode Enables single node mode at launch, therefore node becomes leader automatically
-func NewRaftSetup(inMemory bool, localID, raftPort string, singleNode bool) error {
+func NewRaftSetup(localID string, raftPort string, singleNode bool, raftTimeout time.Duration, retainSnapshotCount int) error {
+	store.raftPort = raftPort
+    store.raftTimeout = raftTimeout
+	store.retainSnapshotCount = retainSnapshotCount
+	
 	// Setup Raft configuration.
 	raftConfig := raft.DefaultConfig()
 	raftConfig.LocalID = raft.ServerID(localID)
@@ -69,7 +91,7 @@ func NewRaftSetup(inMemory bool, localID, raftPort string, singleNode bool) erro
 		logStore = raft.NewInmemStore()
 		stableStore = raft.NewInmemStore()
 	} else {
-		boltDB, err := raftboltdb.NewBoltStore(filepath.Join(store.Directory, "raft.db"))
+		boltDB, err := raftboltdb.NewBoltStore(filepath.Join(store.RaftDirectory, "raft.db"))
 		if err != nil {
 			return fmt.Errorf("Error when creating new bolt store: %s", err)
 		}
@@ -102,12 +124,21 @@ func NewRaftSetup(inMemory bool, localID, raftPort string, singleNode bool) erro
 
 // Set: Establish a provided value for specified key
 func (fsm *fsm) Set(ctx context.Context, key, value string) {
-	fsm.data.Set(key, value)
-	encodedKey := encode(key)
-	encodedValue := encode(value)
+	if fsm.raft.State() != raft.Leader {
+		return fmt.Errorf("Set Error: Not leader")
+	}
 
-	fsm.base64Data.Set(encodedKey, encodedValue)
-	return
+	c := &command{
+		Action:  "set",
+		Key: key,
+	}
+	marshaledJson, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+
+	result := store.raft.Apply(marshaledJson, raftTimeout)
+	return result.Error()
 }
 
 // Get: Retrieve value at specified key
@@ -121,10 +152,38 @@ func (fsm *fsm) Get(ctx context.Context, key string) string {
 }
 
 // Delete: Remove a provided key:value pair
-func (fsm *fsm) Delete(ctx context.Context, key string) { 
+func (fsm *fsm) Delete(ctx context.Context, key string) error { 
+	if fsm.raft.State() != raft.Leader {
+		return fmt.Errorf("Delete Error: Not leader")
+	}
+
+	c := &command{
+		Action:  "delete",
+		Key: key,
+	}
+	marshaledJson, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+
+	result := store.raft.Apply(marshaledJson, raftTimeout)
+	return result.Error()
+}
+
+// Remove a key-value pair from local store.
+func (fsm *fsm) localStoreDelete(ctx context.Context, key string) {
 	fsm.data.Remove(key)
 	base64Key := encode(key)
 	fsm.base64Data.Remove(base64Key)
 }
 
+// Set a key-value pair at local store.
+func (fsm *fsm) localStoreSet(ctx context.Context, key string) {
+	fsm.data.Set(key, value)
+	encodedKey := encode(key)
+	encodedValue := encode(value)
+
+	fsm.base64Data.Set(encodedKey, encodedValue)
+	return
+}
 
