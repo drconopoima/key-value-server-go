@@ -19,3 +19,5 @@ key-value-server-go
 
 testdata/*.json
 testdata/*.json*.tmp
+testdata/*.tmp/*.js
+testdata/**/*.db
