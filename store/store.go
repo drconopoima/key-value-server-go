@@ -6,11 +6,12 @@
 package store
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
+	"math/rand"
 	"net"
 	"os"
 	"path/filepath"
@@ -34,8 +35,9 @@ type syncMap struct {
 }
 
 type Store struct {
-	inMemory      bool
+	InMemory      bool
 	RaftDirectory string
+	RaftAddress   string
 	RaftPort      string
 
 	rwmutex sync.RWMutex
@@ -47,51 +49,48 @@ type Store struct {
 
 	logger hclog.Logger
 
-	retainSnapshotCount int
-	raftTimeout         time.Duration
+	RetainSnapshotCount int
+	RaftTimeout         time.Duration
 }
 
-type fsm Store
-
-type fsmSnapshot struct {
+type storeSnapshot struct {
 	store map[string]string
 }
 
 // New creates and returns a new Store instance by reference
-// inMemory Whether Raft algorithm stored in memory-only, without filesystem database storage
-func New(inMemory bool) *Store {
+func New() *Store {
 	return &Store{
-		inMemory:            inMemory,
-		RaftDirectory:       "",
-		RaftPort:            "",
+		InMemory:            false,
+		RaftDirectory:       "./",
+		RaftAddress:         "",
+		RaftPort:            "9080",
 		rwmutex:             sync.RWMutex{},
 		data:                cmap.New(),
 		base64Data:          cmap.New(),
 		logger:              hclog.Default(),
-		retainSnapshotCount: 2,
-		raftTimeout:         10 * time.Second,
+		RetainSnapshotCount: 2,
+		RaftTimeout:         10 * time.Second,
 	}
 }
 
-// NewRaftSetup configures a raft server
-// localID Server identifier for this node
-// raftPort TCP port for Raft communication
-// singleNode Enables single node mode at launch, therefore node becomes leader automatically
-func NewRaftSetup(store *Store, localID string, raftPort string, singleNode bool, raftTimeout time.Duration, retainSnapshotCount int) error {
-	store.RaftPort = raftPort
-	store.raftTimeout = raftTimeout
-	store.retainSnapshotCount = retainSnapshotCount
+// private methods of Store
+type fsm Store
 
+// Store.StartRaft configures a raft server
+// localID Server identifier for this node
+// singleNode Enables single node mode at launch, therefore node becomes leader automatically
+// inMemory Whether Raft algorithm stored in memory-only, without filesystem database storage
+func (self *Store) StartRaft(localID string, singleNode, inMemory bool) error {
 	// Setup Raft configuration.
 	raftConfig := raft.DefaultConfig()
 	raftConfig.LocalID = raft.ServerID(localID)
-
+	localAddress := self.RaftAddress + ":" + self.RaftPort
 	// Setup Raft communication.
-	address, err := net.ResolveTCPAddr("tcp", store.RaftPort)
+	address, err := net.ResolveTCPAddr("tcp", localAddress)
 	if err != nil {
 		return err
 	}
-	transport, err := raft.NewTCPTransport(store.RaftPort, address, 3, 10*time.Second, os.Stderr)
+	transport, err := raft.NewTCPTransport(localAddress, address, 3, 10*time.Second, os.Stderr)
 	if err != nil {
 		return err
 	}
@@ -99,33 +98,34 @@ func NewRaftSetup(store *Store, localID string, raftPort string, singleNode bool
 	// Create the log store and stable store.
 	var logStore raft.LogStore
 	var stableStore raft.StableStore
-	if store.inMemory {
-		store.inMemory = true
+	if inMemory {
+		self.InMemory = true
 		logStore = raft.NewInmemStore()
 		stableStore = raft.NewInmemStore()
 	} else {
-		stableDB, err := raftboltdb.NewBoltStore(filepath.Join(store.RaftDirectory, "stable", "stable.db"))
+		self.InMemory = false
+		stableDB, err := raftboltdb.NewBoltStore(filepath.Join(self.RaftDirectory, "stable", "stable.db"))
 		if err != nil {
 			return fmt.Errorf("Error when creating new stable bolt store: %v", err)
 		}
-		logDB, err := raftboltdb.NewBoltStore(filepath.Join(store.RaftDirectory, "log", "log.db"))
+		logDB, err := raftboltdb.NewBoltStore(filepath.Join(self.RaftDirectory, "log", "log.db"))
 		if err != nil {
 			return fmt.Errorf("Error when creating new log bolt store: %v", err)
 		}
 		logStore = logDB
 		stableStore = stableDB
 	}
-	snapshotStore, err := raft.NewFileSnapshotStoreWithLogger(filepath.Join(store.RaftDirectory, "snaps"), 5, store.logger)
+	snapshotStore, err := raft.NewFileSnapshotStoreWithLogger(filepath.Join(self.RaftDirectory, "snaps"), 5, self.logger)
 	if err != nil {
 		return fmt.Errorf("Error when creating new snapshot store: %v", err)
 	}
 	// Instantiate the Raft systems.
-	raftInstance, err := raft.NewRaft(raftConfig, (*fsm)(store), logStore, stableStore, snapshotStore, transport)
+	raftInstance, err := raft.NewRaft(raftConfig, (*Store)(self), logStore, stableStore, snapshotStore, transport)
 	if err != nil {
 		return fmt.Errorf("Error when instantiating Raft Consensus: %v", err)
 	}
 
-	store.raft = raftInstance
+	self.raft = raftInstance
 
 	if singleNode {
 		configuration := raft.Configuration{
@@ -136,14 +136,32 @@ func NewRaftSetup(store *Store, localID string, raftPort string, singleNode bool
 				},
 			},
 		}
-		store.raft.BootstrapCluster(configuration)
+		self.raft.BootstrapCluster(configuration)
 	}
+
+	// Watch the leader election forever.
+	leaderCh := self.raft.LeaderCh()
+	go func() {
+		for {
+			select {
+			case isLeader := <-leaderCh:
+				if isLeader {
+					log.Printf("Cluster leadership acquired")
+					// snapshot at random
+					chance := rand.Int() % 10
+					if chance == 0 {
+						self.raft.Snapshot()
+					}
+				}
+			}
+		}
+	}()
 
 	return nil
 }
 
 // Apply function to apply a Raft log entry to the key-value store.
-func (fsm *fsm) Apply(raftLog *raft.Log) interface{} {
+func (self *Store) Apply(raftLog *raft.Log) interface{} {
 	var command command
 	if err := json.Unmarshal(raftLog.Data, &command); err != nil {
 		panic(fmt.Sprintf("Error: Failed to unmarshal command %v. %v", raftLog.Data, err))
@@ -151,10 +169,10 @@ func (fsm *fsm) Apply(raftLog *raft.Log) interface{} {
 
 	switch command.Action {
 	case "set":
-		fsm.localStoreSet(context.Background(), command.Key, command.Value)
+		self.localStoreSet(command.Key, command.Value)
 		return nil
 	case "delete":
-		fsm.localStoreDelete(context.Background(), command.Key)
+		self.localStoreDelete(command.Key)
 		return nil
 	default:
 		panic(fmt.Sprintf("Unrecognized command action: %v", command.Action))
@@ -162,8 +180,8 @@ func (fsm *fsm) Apply(raftLog *raft.Log) interface{} {
 }
 
 // Set: Establish a provided value for specified key
-func (fsm *fsm) Set(ctx context.Context, key, value string) error {
-	if fsm.raft.State() != raft.Leader {
+func (self *Store) Set(key, value string) error {
+	if self.raft.State() != raft.Leader {
 		return fmt.Errorf("Set Error: Not leader")
 	}
 
@@ -176,13 +194,13 @@ func (fsm *fsm) Set(ctx context.Context, key, value string) error {
 		return err
 	}
 
-	result := fsm.raft.Apply(marshaledJson, fsm.raftTimeout)
+	result := self.raft.Apply(marshaledJson, self.RaftTimeout)
 	return result.Error()
 }
 
 // Get: Retrieve value at specified key
-func (fsm *fsm) Get(ctx context.Context, key string) string {
-	valueInterface, ok := fsm.data.Get(key)
+func (self *Store) Get(key string) string {
+	valueInterface, ok := self.data.Get(key)
 	if !ok {
 		return ""
 	}
@@ -191,8 +209,8 @@ func (fsm *fsm) Get(ctx context.Context, key string) string {
 }
 
 // Delete: Remove a provided key:value pair
-func (fsm *fsm) Delete(ctx context.Context, key string) error {
-	if fsm.raft.State() != raft.Leader {
+func (self *Store) Delete(key string) error {
+	if self.raft.State() != raft.Leader {
 		return fmt.Errorf("Delete Error: Not leader")
 	}
 
@@ -205,16 +223,16 @@ func (fsm *fsm) Delete(ctx context.Context, key string) error {
 		return err
 	}
 
-	result := fsm.raft.Apply(marshaledJson, fsm.raftTimeout)
+	result := self.raft.Apply(marshaledJson, self.RaftTimeout)
 	return result.Error()
 }
 
-func encode(text string) string {
+func (self *Store) encode(text string) string {
 	base64Text := base64.URLEncoding.EncodeToString([]byte(text))
 	return base64Text
 }
 
-func decode(text string) (string, error) {
+func (self *Store) decode(text string) (string, error) {
 	decodedText, err := base64.URLEncoding.DecodeString(text)
 	if err != nil {
 		return "", err
@@ -223,36 +241,36 @@ func decode(text string) (string, error) {
 }
 
 // Remove a key-value pair from local store.
-func (fsm *fsm) localStoreDelete(ctx context.Context, key string) {
-	fsm.data.Remove(key)
-	base64Key := encode(key)
-	fsm.base64Data.Remove(base64Key)
+func (self *Store) localStoreDelete(key string) {
+	self.data.Remove(key)
+	base64Key := self.encode(key)
+	self.base64Data.Remove(base64Key)
 }
 
 // Set a key-value pair at local store.
-func (fsm *fsm) localStoreSet(ctx context.Context, key, value string) {
-	fsm.data.Set(key, value)
-	encodedKey := encode(key)
-	encodedValue := encode(value)
+func (self *Store) localStoreSet(key, value string) {
+	self.data.Set(key, value)
+	encodedKey := self.encode(key)
+	encodedValue := self.encode(value)
 
-	fsm.base64Data.Set(encodedKey, encodedValue)
+	self.base64Data.Set(encodedKey, encodedValue)
 	return
 }
 
 // Snapshot returns a snapshot of the key-value store.
-func (fsm *fsm) Snapshot() (raft.FSMSnapshot, error) {
+func (self *Store) Snapshot() (raft.FSMSnapshot, error) {
 	snapshot_map := make(map[string]string)
 	// Clone the map.
-	for item := range fsm.base64Data.Iter() {
+	for item := range self.base64Data.Iter() {
 		valueInterface := item.Val
 		valueString := valueInterface.(string)
 		snapshot_map[item.Key] = valueString
 	}
-	return &fsmSnapshot{store: snapshot_map}, nil
+	return &storeSnapshot{store: snapshot_map}, nil
 }
 
 // Restore Recovers a previous state of the key-value store from snapshot.
-func (fsm *fsm) Restore(rc io.ReadCloser) error {
+func (self *Store) Restore(rc io.ReadCloser) error {
 	map_restore := syncMap{
 		make(map[string]string),
 		sync.RWMutex{},
@@ -267,17 +285,17 @@ func (fsm *fsm) Restore(rc io.ReadCloser) error {
 	map_restore.rwmutex.RLock()
 	for key, value := range map_restore.dataMap {
 		waitGroupData.Add(1)
-		go setWorker(key, value, &fsm.base64Data, &waitGroupData)
-		decodedKey, err := decode(key)
+		go self.setWorker(key, value, &self.base64Data, &waitGroupData)
+		decodedKey, err := self.decode(key)
 		if err != nil {
 			return err
 		}
-		decodedValue, err := decode(value)
+		decodedValue, err := self.decode(value)
 		if err != nil {
 			return err
 		}
 		waitGroupBase64Data.Add(1)
-		go setWorker(decodedKey, decodedValue, &fsm.base64Data, &waitGroupBase64Data)
+		go self.setWorker(decodedKey, decodedValue, &self.base64Data, &waitGroupBase64Data)
 	}
 	waitGroupData.Wait()
 	waitGroupBase64Data.Wait()
@@ -285,15 +303,15 @@ func (fsm *fsm) Restore(rc io.ReadCloser) error {
 	return nil
 }
 
-func setWorker(key, value string, data *cmap.ConcurrentMap, wg *sync.WaitGroup) error {
+func (self *Store) setWorker(key, value string, data *cmap.ConcurrentMap, wg *sync.WaitGroup) error {
 	defer wg.Done()
 	data.Set(key, value)
 	return nil
 }
 
-func (fsm *fsmSnapshot) Persist(sink raft.SnapshotSink) error {
+func (self *storeSnapshot) Persist(sink raft.SnapshotSink) error {
 	err := func() error {
-		marshaledJson, err := json.Marshal(fsm.store)
+		marshaledJson, err := json.Marshal(self.store)
 		if err != nil {
 			return err
 		}
@@ -314,4 +332,4 @@ func (fsm *fsmSnapshot) Persist(sink raft.SnapshotSink) error {
 	return err
 }
 
-func (fsm *fsmSnapshot) Release() {}
+func (self *storeSnapshot) Release() {}
