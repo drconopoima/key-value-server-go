@@ -7,24 +7,15 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 
 	"github.com/drconopoima/key-value-server-go/store"
 	"github.com/go-chi/chi/v5"
+
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
-	cmap "github.com/orcaman/concurrent-map"
 )
 
-type syncMap struct {
-	dataMap map[string]string
-	rwmutex sync.RWMutex
-}
-
-var (
-	data       = cmap.New()
-	base64Data = cmap.New()
-)
+var fsm *store.Store
 
 func main() {
 	// Get port from PORT environment variables (default: 8080)
@@ -75,12 +66,12 @@ func main() {
 		}
 	}
 
-	store := store.New()
-	store.RaftAddress = raftAddress
-	store.RaftPort = raftPort
-	store.RaftDirectory = storageDir
+	fsm = store.New()
+	fsm.RaftAddress = raftAddress
+	fsm.RaftPort = raftPort
+	fsm.RaftDirectory = storageDir
 
-	err := store.StartRaft(localID, singleNode, raftInMemory)
+	err := fsm.StartRaft(localID, singleNode, raftInMemory)
 	if err != nil {
 		log.Fatalf("Error while setting up Raft: %v", err)
 	}
@@ -88,13 +79,13 @@ func main() {
 	router.Use(middleware.Logger)
 	router.Get("/key/{key}", func(writerGet http.ResponseWriter, requestGet *http.Request) {
 		key := chi.URLParam(requestGet, "key")
-		dataGet := store.Get(key)
+		dataGet := fsm.Get(key)
 
 		JSON(writerGet, dataGet)
 	})
 	router.Delete("/key/{key}", func(writerDelete http.ResponseWriter, requestDelete *http.Request) {
 		key := chi.URLParam(requestDelete, "key")
-		store.Delete(key)
+		fsm.Delete(key)
 
 		JSON(writerDelete, map[string]string{"status": "success"})
 	})
@@ -106,7 +97,7 @@ func main() {
 			JSON(writerSet, map[string]string{"error": err.Error()})
 			return
 		}
-		store.Set(key, string(body))
+		fsm.Set(key, string(body))
 
 		JSON(writerSet, map[string]string{"status": "success"})
 	})

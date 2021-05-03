@@ -185,11 +185,12 @@ func (self *Store) Set(key, value string) error {
 		return fmt.Errorf("Set Error: Not leader")
 	}
 
-	c := &command{
+	cmd := &command{
 		Action: "set",
 		Key:    key,
+		Value:  value,
 	}
-	marshaledJson, err := json.Marshal(c)
+	marshaledJson, err := json.Marshal(cmd)
 	if err != nil {
 		return err
 	}
@@ -214,11 +215,11 @@ func (self *Store) Delete(key string) error {
 		return fmt.Errorf("Delete Error: Not leader")
 	}
 
-	c := &command{
+	cmd := &command{
 		Action: "delete",
 		Key:    key,
 	}
-	marshaledJson, err := json.Marshal(c)
+	marshaledJson, err := json.Marshal(cmd)
 	if err != nil {
 		return err
 	}
