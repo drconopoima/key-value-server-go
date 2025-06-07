@@ -1,8 +1,8 @@
 module github.com/drconopoima/key-value-server-go
 
-go 1.16
+go 1.20
 
 require (
-	github.com/go-chi/chi/v5 v5.0.2
-	github.com/orcaman/concurrent-map v0.0.0-20210106121528-16402b402231
+	github.com/go-chi/chi/v5 v5.2.1 // indirect
+	github.com/orcaman/concurrent-map v1.0.0 // indirect
 )
