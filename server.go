@@ -16,7 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	cmap "github.com/orcaman/concurrent-map"
+	cmap "github.com/orcaman/concurrent-map/v2"
 )
 
 type syncMap struct {
@@ -25,8 +25,8 @@ type syncMap struct {
 }
 
 var (
-	data       = cmap.New()
-	base64Data = cmap.New()
+	data       = cmap.New[string]()
+	base64Data = cmap.New[string]()
 )
 
 func main() {
@@ -98,11 +98,10 @@ func JSON(writer http.ResponseWriter, dataJson interface{}) {
 
 // Get: Retrieve value at specified key
 func Get(context context.Context, key string) string {
-	valueInterface, ok := data.Get(key)
+	valueString, ok := data.Get(key)
 	if !ok {
 		return ""
 	}
-	valueString, ok := valueInterface.(string)
 	return valueString
 }
 
@@ -132,7 +131,7 @@ func dataPath(storageDir string) string {
 	return filepath.Join(storageDir, "data.json")
 }
 
-func loadData(dataFile string, base64Data, data *cmap.ConcurrentMap) error {
+func loadData(dataFile string, base64Data, data *cmap.ConcurrentMap[string, string]) error {
 	// Check if the file exists or save empty data to create.
 	if _, err := os.Stat(dataFile); os.IsNotExist(err) {
 		return saveData(base64Data, dataFile)
@@ -159,7 +158,7 @@ func loadData(dataFile string, base64Data, data *cmap.ConcurrentMap) error {
 	return nil
 }
 
-func saveData(base64Data *cmap.ConcurrentMap, dataFile string) (err error) {
+func saveData(base64Data *cmap.ConcurrentMap[string, string], dataFile string) (err error) {
 	// Parent directory
 	parentDir := filepath.Dir(dataFile)
 	dataFileName := filepath.Base(dataFile)
@@ -230,7 +229,7 @@ func encode(text string) string {
 	return base64Text
 }
 
-func decodeWhole(base64DataMap *syncMap, base64Data *cmap.ConcurrentMap, data *cmap.ConcurrentMap) error {
+func decodeWhole(base64DataMap *syncMap, base64Data *cmap.ConcurrentMap[string, string], data *cmap.ConcurrentMap[string, string]) error {
 	waitGroup := sync.WaitGroup{}
 
 	base64DataMap.rwmutex.RLock()
@@ -258,7 +257,7 @@ func decodeWorker(key, value string, wg *sync.WaitGroup) error {
 	return nil
 }
 
-func schedule(interval time.Duration, saveData func(*cmap.ConcurrentMap, string) error, base64Data *cmap.ConcurrentMap, dataFile string, quitChannel *chan bool) {
+func schedule(interval time.Duration, saveData func(*cmap.ConcurrentMap[string, string], string) error, base64Data *cmap.ConcurrentMap[string, string], dataFile string, quitChannel *chan bool) {
 	ticker := time.NewTicker(interval)
 	go func() {
 		for range ticker.C {
