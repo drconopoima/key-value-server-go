@@ -1,0 +1,3 @@
+#!/bin/bash
+source /home/ljdm/workspace/github.com/drconopoima/key-value-server-go/k6_loadtester/venv/bin/activate
+python3 /home/ljdm/workspace/github.com/drconopoima/key-value-server-go/k6_loadtester/loadtester.py "$@"
