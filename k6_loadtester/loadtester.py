@@ -271,17 +271,17 @@ def run_simultaneous_tests(
 
 def wait_for_duration(duration_seconds: int) -> None:
     """Wait for the specified duration in seconds."""
-    print(f"  Waiting for {duration_seconds} seconds for tests to complete...")
+    # print(f"  Waiting for {duration_seconds} seconds for tests to complete...")
     time.sleep(duration_seconds)
 
 
 def terminate_k6_processes(processes: Dict[str, subprocess.Popen]) -> None:
     """Send SIGTERM to all k6 processes to gracefully terminate them."""
-    print("  Sending SIGTERM to k6 processes...")
+    # print("  Sending SIGTERM to k6 processes...")
     for name, proc in processes.items():
         try:
             proc.kill()
-            print(f"    SIGTERM sent to {name}")
+            # print(f"    SIGTERM sent to {name}")
         except Exception as e:
             print(f"    Warning: Could not terminate {name}: {e}")
     
@@ -289,13 +289,13 @@ def terminate_k6_processes(processes: Dict[str, subprocess.Popen]) -> None:
     print("  Waiting for k6 processes to exit...")
     for name, proc in processes.items():
         try:
-            proc.wait(timeout=10)
-            print(f"    {name} exited with code {proc.returncode}")
+            proc.wait(timeout=3)
+            # print(f"    {name} exited with code {proc.returncode}")
         except subprocess.TimeoutExpired:
             print(f"    Warning: {name} did not exit, sending SIGKILL...")
             proc.kill()
             proc.wait()
-            print(f"    {name} killed")
+            # print(f"    {name} killed")
 
 
 def get_throughput_from_metrics(metrics: Optional[Dict]) -> Optional[float]:
@@ -315,7 +315,6 @@ def get_throughput_from_metrics(metrics: Optional[Dict]) -> Optional[float]:
         if "data" in metrics:
             for metric in metrics["data"]:
                 if metric.get("id") == "http_reqs":
-                    print(f"{metric.get("attributes",{}).get("sample", {})}")
                     rate = metric.get("attributes", {}).get("sample", {}).get("rate", 0)
                     return float(rate)
         
@@ -356,13 +355,14 @@ def collect_metrics_during_test(
     return metrics_list
 
 
-def run_test_iteration(
+def run_single_test_iteration(
     vus: int,
     duration: str,
     k6_base_address: str,
-    linger: bool
+    linger: bool,
+    run_number: int = 1
 ) -> Dict[str, Optional[float]]:
-    """Run one iteration of tests and collect metrics from each k6 instance.
+    """Run a single test iteration and collect metrics from each k6 instance.
     
     Flow:
     1. Start all k6 tests simultaneously
@@ -370,7 +370,7 @@ def run_test_iteration(
     3. Pull metrics from each k6 instance's REST API
     4. Send SIGTERM to terminate all k6 processes
     """
-    print(f"\n=== Testing with {vus} VUs ===")
+    print(f"  Run {run_number}: Testing with {vus} VUs")
     
     # Parse base address to extract host and port
     parts = k6_base_address.rsplit(":", 1)
@@ -385,7 +385,7 @@ def run_test_iteration(
     duration_seconds = parse_duration(duration)
     
     # Start all tests with consecutive ports
-    print("  Starting k6 test processes...")
+    print("    Starting k6 test processes...")
     processes = run_simultaneous_tests(vus, duration, k6_base_address, linger)
     
     # Build list of all k6 API addresses
@@ -393,13 +393,12 @@ def run_test_iteration(
     for idx, name in enumerate(K6_SCRIPTS.keys()):
         port = base_port + idx
         k6_api_addresses[name] = f"{host}:{port}"
-        print(f"    {name}: API at {k6_api_addresses[name]}")
     
     # Wait for the full duration
     wait_for_duration(duration_seconds)
     
     # After duration, pull metrics from each k6 instance
-    print("\n  Pulling metrics from k6 instances...")
+    print("    Pulling metrics from k6 instances...")
     results = {}
     for name, api_addr in k6_api_addresses.items():
         final_metrics = fetch_k6_metrics(api_addr)
@@ -409,12 +408,12 @@ def run_test_iteration(
             results[name] = throughput
             
             if throughput is not None:
-                print(f"    {name} (API: {api_addr}): {throughput:.2f} req/s")
+                print(f"      {name}: {throughput:.2f} req/s")
             else:
-                print(f"    {name} (API: {api_addr}): metrics not available")
+                print(f"      {name}: metrics not available")
         else:
             results[name] = None
-            print(f"    {name} (API: {api_addr}): could not fetch metrics")
+            print(f"      {name}: could not fetch metrics")
     
     # Terminate all k6 processes
     terminate_k6_processes(processes)
@@ -424,9 +423,77 @@ def run_test_iteration(
     results["combined"] = combined if combined > 0 else None
     
     if combined is not None:
-        print(f"\n  Combined throughput: {combined:.2f} req/s")
+        print(f"    Combined throughput: {combined:.2f} req/s")
     
     return results
+
+
+def run_test_iteration(
+    vus: int,
+    duration: str,
+    k6_base_address: str,
+    linger: bool,
+    server_addr: str = "localhost:8080",
+    data_file: str = "data.json"
+) -> Dict[str, Optional[float]]:
+    """Run multiple test iterations (4 runs) and return average of top 2 results.
+    
+    For each VU count:
+    1. Run 4 separate test iterations
+    2. Collect all results
+    3. For each test type (get, post, delete, combined), sort results and average top 2
+    4. Print detailed results for each run
+    """
+    print(f"\n=== ITERATION: {vus} VUs ===")
+    
+    NUM_RUNS = 4
+    all_results = {name: [] for name in K6_SCRIPTS.keys()}
+    all_results["combined"] = []
+    
+    for run_num in range(1, NUM_RUNS + 1):
+        # Clean up data file before each run
+        cleanup_data_file(data_file)
+        
+        # Get a fresh Go server for each run
+        go_server = start_go_server(server_addr, data_file)
+        
+        try:
+            single_results = run_single_test_iteration(
+                vus, duration, k6_base_address, linger, run_num
+            )
+            
+            # Store results for each test type
+            for name in all_results.keys():
+                all_results[name].append(single_results.get(name))
+        finally:
+            stop_go_server(go_server)
+            time.sleep(1)
+    
+    # Calculate average of top 2 results for each test type
+    averaged_results = {}
+    print(f"\n  Results for {vus} VUs (4 runs, averaging top 2):")
+    
+    for name in all_results.keys():
+        # Filter out None values
+        valid_results = [r for r in all_results[name] if r is not None]
+        
+        if len(valid_results) >= 2:
+            # Sort descending and take top 2
+            sorted_results = sorted(valid_results, reverse=True)
+            top2 = sorted_results[:2]
+            average = sum(top2) / len(top2)
+            averaged_results[name] = average
+            
+            # Print all runs and the averaged result
+            print(f"    {name.upper()}: runs=[{', '.join(f'{r:.2f}' for r in all_results[name] if r is not None)}], top2=[{', '.join(f'{r:.2f}' for r in top2)}], avg_top2={average:.2f} req/s")
+        elif len(valid_results) == 1:
+            averaged_results[name] = valid_results[0]
+            print(f"    {name.upper()}: runs=[{valid_results[0]:.2f}], only 1 valid result")
+        else:
+            averaged_results[name] = None
+            print(f"    {name.upper()}: no valid results")
+    
+    return averaged_results
 
 
 def parse_duration(duration_str: str) -> int:
@@ -463,41 +530,28 @@ def run_load_test_series(
 ) -> Dict[int, Dict[str, Optional[float]]]:
     """Run a series of load tests with increasing VU counts.
     
-    For each iteration:
-    1. Clean up previous data file
-    2. Start Go server
-    3. Run k6 tests
-    4. Collect metrics
-    5. Stop Go server
-    
-    This ensures each iteration starts with a clean state.
+    For each VU iteration:
+    1. Run 4 separate test iterations (handled inside run_test_iteration)
+    2. Average the top 2 results for each test type
+    3. Each run within an iteration has its own clean Go server and data file
     """
     results = {}
     
+    iteration_count = 0
     for vus in range(min_vus, max_vus + 1, step):
+        iteration_count += 1
         print(f"\n{'='*60}")
-        print(f"  STARTING ITERATION: {vus} VUs")
+        print(f"  ITERATION {iteration_count}: {vus} VUs")
         print(f"{'='*60}")
         
-        # Clean up data file from previous iteration
-        cleanup_data_file(data_file)
+        iteration_results = run_test_iteration(
+            vus, duration, k6_address, linger, server_addr, data_file
+        )
+        results[vus] = iteration_results
         
-        # Start fresh Go server for this iteration
-        go_server = start_go_server(server_addr, data_file)
-        
-        try:
-            iteration_results = run_test_iteration(
-                vus, duration, k6_address, linger
-            )
-            results[vus] = iteration_results
-        finally:
-            # Stop Go server after this iteration
-            stop_go_server(go_server)
-            
-            # Small delay between iterations
-            print("  Waiting before next iteration...")
-            time.sleep(2)
-            cleanup_data_file(data_file)
+        # Small delay between VU iterations
+        print("\n  Waiting before next VU iteration...")
+        time.sleep(1)
     
     return results
 
