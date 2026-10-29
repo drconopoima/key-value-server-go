@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	cmap "github.com/orcaman/concurrent-map/v2"
 )
 
@@ -57,7 +56,6 @@ func main() {
 	var quitChannel chan bool
 	schedule(time.Duration(saveInterval)*time.Second, saveData, &base64Data, dataFile, &quitChannel)
 	router := chi.NewRouter()
-	router.Use(middleware.Logger)
 	router.Get("/key/{key}", func(writerGet http.ResponseWriter, requestGet *http.Request) {
 		key := chi.URLParam(requestGet, "key")
 		dataGet := Get(requestGet.Context(), key)
