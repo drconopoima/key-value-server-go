@@ -96,7 +96,14 @@ def parse_args():
         default="loadtest_results.png",
         help="Output filename for the chart (default: loadtest_results.png)"
     )
-    
+
+    parser.add_argument(
+        "--data-file",
+        type=str,
+        default="data.json",
+        help="Persistent key value data storage in json. It will be removed to avoid adding startup data load workload to measurement (default: \"data.json\")"
+    )
+
     return parser.parse_args()
 
 
@@ -115,7 +122,7 @@ def check_k6_scripts():
     print(f"Found k6 scripts: {', '.join(K6_SCRIPTS.keys())}")
 
 
-def start_go_server(server_addr: str) -> subprocess.Popen:
+def start_go_server(server_addr: str, data_file: str) -> subprocess.Popen:
     """Start the Go key-value server."""
     print(f"Starting Go server on {server_addr}...")
     
@@ -123,6 +130,7 @@ def start_go_server(server_addr: str) -> subprocess.Popen:
     port = server_addr.split(":")[-1]
     env = dict(os.environ)
     env["PORT"] = port
+    env["STORAGE_DIR"] = Path(data_file).parent.resolve()
     
     cmd = ["go", "run", ".", "-release"]
     
@@ -166,24 +174,15 @@ def stop_go_server(go_server_proc: subprocess.Popen) -> None:
             pass
 
 
-def cleanup_data_file() -> None:
+def cleanup_data_file(data_file: str) -> None:
     """Remove the data.json file to avoid contamination between iterations."""
-    data_file = PROJECT_ROOT / "var" / "tmp" / "data.json"
+    data_file = Path(data_file).resolve()
     if data_file.exists():
         try:
             data_file.unlink()
-            print("  Removed /var/tmp/data.json")
+            print(f"  Removed {data_file}")
         except Exception as e:
             print(f"  Warning: Could not remove {data_file}: {e}")
-    
-    # Also try the path from the server code
-    data_file_alt = PROJECT_ROOT / "data.json"
-    if data_file_alt.exists():
-        try:
-            data_file_alt.unlink()
-            print("  Removed ./data.json")
-        except Exception as e:
-            print(f"  Warning: Could not remove {data_file_alt}: {e}")
 
 
 def get_k6_api_url(k6_address: str) -> str:
@@ -316,6 +315,7 @@ def get_throughput_from_metrics(metrics: Optional[Dict]) -> Optional[float]:
         if "data" in metrics:
             for metric in metrics["data"]:
                 if metric.get("id") == "http_reqs":
+                    print(f"{metric.get("attributes",{}).get("sample", {})}")
                     rate = metric.get("attributes", {}).get("sample", {}).get("rate", 0)
                     return float(rate)
         
@@ -458,7 +458,8 @@ def run_load_test_series(
     server_addr: str,
     k6_address: str,
     duration: str,
-    linger: bool
+    linger: bool,
+    data_file: str
 ) -> Dict[int, Dict[str, Optional[float]]]:
     """Run a series of load tests with increasing VU counts.
     
@@ -479,10 +480,10 @@ def run_load_test_series(
         print(f"{'='*60}")
         
         # Clean up data file from previous iteration
-        cleanup_data_file()
+        cleanup_data_file(data_file)
         
         # Start fresh Go server for this iteration
-        go_server = start_go_server(server_addr)
+        go_server = start_go_server(server_addr, data_file)
         
         try:
             iteration_results = run_test_iteration(
@@ -496,6 +497,7 @@ def run_load_test_series(
             # Small delay between iterations
             print("  Waiting before next iteration...")
             time.sleep(2)
+            cleanup_data_file(data_file)
     
     return results
 
@@ -663,7 +665,8 @@ def main():
     print(f"k6 API address: {args.k6_address}")
     print(f"Duration: {args.duration}")
     print(f"Linger: {args.linger}")
-    
+    print(f"Data File: {args.data_file}")
+
     results = run_load_test_series(
         min_vus=args.min_vus,
         max_vus=args.max_vus,
@@ -671,7 +674,8 @@ def main():
         server_addr=args.server_addr,
         k6_address=args.k6_address,
         duration=args.duration,
-        linger=args.linger
+        linger=args.linger,
+        data_file=args.data_file
     )
     
     # Generate chart
