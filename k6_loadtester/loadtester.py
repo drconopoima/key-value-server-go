@@ -218,6 +218,8 @@ def run_k6_test(
         "k6", "run",
         "--vus", str(vus),
         "--duration", duration,
+        "--summary-mode",
+        "disabled"
     ]
     
     if linger:
