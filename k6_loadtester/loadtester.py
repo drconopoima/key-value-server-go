@@ -126,10 +126,19 @@ def start_go_server(server_addr: str, data_file: str) -> subprocess.Popen:
     """Start the Go key-value server."""
     print(f"Starting Go server on {server_addr}...")
     
-    # Set PORT environment variable
-    port = server_addr.split(":")[-1]
+    # Parse server_addr to get host and port
+    parts = server_addr.rsplit(":", 1)
+    if len(parts) == 2:
+        host = parts[0]
+        port = parts[1]
+    else:
+        host = "localhost"
+        port = server_addr
+    
+    # Set environment variables
     env = dict(os.environ)
     env["PORT"] = port
+    env["ADDRESS"] = host
     env["STORAGE_DIR"] = Path(data_file).parent.resolve()
     
     cmd = ["go", "run", "."]
@@ -143,16 +152,35 @@ def start_go_server(server_addr: str, data_file: str) -> subprocess.Popen:
         text=True
     )
     
-    # Wait for server to start
-    time.sleep(2)
+    # Wait for server to start with retry logic
+    import urllib.request
+    import urllib.error
+    max_retries = 10
+    retry_delay = 0.5
+    server_up = False
     
-    # Check if server is running
-    try:
-        import urllib.request
-        urllib.request.urlopen(f"http://{server_addr}/key/test", timeout=5)
-        print(f"Go server is running at http://{server_addr}")
-    except Exception as e:
-        print(f"Warning: Could not verify server startup: {e}")
+    for i in range(max_retries):
+        try:
+            # Try to connect - any HTTP response (even 404) means server is running
+            response = urllib.request.urlopen(f"http://{server_addr}/key/test", timeout=2)
+            server_up = True
+            print(f"Go server is running at http://{server_addr}")
+            break
+        except urllib.error.HTTPError as e:
+            # Server responded with HTTP error code (404, 500, etc.) - it IS running
+            # 404 is expected since /key/test doesn't exist
+            if e.code == 404:
+                server_up = True
+                print(f"Go server is running at http://{server_addr}")
+                break
+            else:
+                print(f"Server responded with HTTP {e.code}, but is running")
+                server_up = True
+                break
+        except Exception as e:
+            if i == max_retries - 1:
+                print(f"Warning: Could not verify server startup after {max_retries * retry_delay}s: {e}")
+            time.sleep(retry_delay)
     
     return proc
 
@@ -211,9 +239,14 @@ def run_k6_test(
     vus: int,
     duration: str,
     k6_address: str,
-    linger: bool
+    linger: bool,
+    server_addr: str
 ) -> subprocess.Popen:
-    """Run a single k6 test with the given parameters."""
+    """Run a single k6 test with the given parameters.
+    
+    Now passes SERVER_ADDR as environment variable to k6 so the test
+    scripts can use __ENV.SERVER_ADDR to connect to the correct server.
+    """
     cmd = [
         "k6", "run",
         "--vus", str(vus),
@@ -230,13 +263,18 @@ def run_k6_test(
     
     cmd.append(str(script_path))
     
+    # Pass server address to k6 as environment variable
+    env = dict(os.environ)
+    env["SERVER_ADDR"] = server_addr
+    
     print(f"  Running k6 test: {' '.join(cmd)}")
     
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True
+        text=True,
+        env=env
     )
     
     return proc
@@ -246,13 +284,13 @@ def run_simultaneous_tests(
     vus: int,
     duration: str,
     k6_base_address: str,
-    linger: bool
+    linger: bool,
+    server_addr: str
 ) -> Dict[str, subprocess.Popen]:
     """Run all three k6 tests simultaneously with consecutive ports."""
     processes = {}
     
     # Parse base address to extract host and port
-    # k6_base_address format: hostname:port
     parts = k6_base_address.rsplit(":", 1)
     if len(parts) == 2:
         host = parts[0]
@@ -265,7 +303,7 @@ def run_simultaneous_tests(
     for idx, (name, script_path) in enumerate(K6_SCRIPTS.items()):
         port = base_port + idx
         k6_address = f"{host}:{port}"
-        proc = run_k6_test(script_path, vus, duration, k6_address, linger)
+        proc = run_k6_test(script_path, vus, duration, k6_address, linger, server_addr)
         processes[name] = proc
     
     return processes
@@ -278,12 +316,12 @@ def wait_for_duration(duration_seconds: int) -> None:
 
 
 def terminate_k6_processes(processes: Dict[str, subprocess.Popen]) -> None:
-    """Send SIGTERM to all k6 processes to gracefully terminate them."""
+    """Send SIGTERM (SIGKILL for now) to all k6 processes to gracefully terminate them."""
     # print("  Sending SIGTERM to k6 processes...")
     for name, proc in processes.items():
         try:
             proc.kill()
-            # print(f"    SIGTERM sent to {name}")
+            # print(f"    {name} exited with code {proc.returncode}")
         except Exception as e:
             print(f"    Warning: Could not terminate {name}: {e}")
     
@@ -292,7 +330,6 @@ def terminate_k6_processes(processes: Dict[str, subprocess.Popen]) -> None:
     for name, proc in processes.items():
         try:
             proc.wait(timeout=3)
-            # print(f"    {name} exited with code {proc.returncode}")
         except subprocess.TimeoutExpired:
             print(f"    Warning: {name} did not exit, sending SIGKILL...")
             proc.kill()
@@ -317,7 +354,6 @@ def get_throughput_from_metrics(metrics: Optional[Dict]) -> Optional[float]:
         if "data" in metrics:
             for metric in metrics["data"]:
                 if metric.get("id") == "http_reqs":
-                    print(f'{metric}')
                     attributes = metric.get("attributes", {})
                     sample = attributes.get("sample", {})
                     rate = float(sample.get("rate", 0.0))
@@ -365,7 +401,8 @@ def run_single_test_iteration(
     duration: str,
     k6_base_address: str,
     linger: bool,
-    run_number: int = 1
+    run_number: int = 1,
+    server_addr: str = "localhost:8080"
 ) -> Dict[str, Optional[float]]:
     """Run a single test iteration and collect metrics from each k6 instance.
     
@@ -391,7 +428,7 @@ def run_single_test_iteration(
     
     # Start all tests with consecutive ports
     print("    Starting k6 test processes...")
-    processes = run_simultaneous_tests(vus, duration, k6_base_address, linger)
+    processes = run_simultaneous_tests(vus, duration, k6_base_address, linger, server_addr)
     
     # Build list of all k6 API addresses
     k6_api_addresses = {}
@@ -464,7 +501,7 @@ def run_test_iteration(
         
         try:
             single_results = run_single_test_iteration(
-                vus, duration, k6_base_address, linger, run_num
+                vus, duration, k6_base_address, linger, run_num, server_addr
             )
             
             # Store results for each test type
@@ -706,8 +743,6 @@ def check_dependencies():
 
 
 def main():
-    import os
-    
     # Parse arguments
     args = parse_args()
     

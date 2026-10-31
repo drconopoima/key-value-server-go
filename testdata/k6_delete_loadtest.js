@@ -1,8 +1,10 @@
 import http from 'k6/http';
 
+const SERVER_ADDR = __ENV.SERVER_ADDR || 'localhost:8080';
+
 export default function () {
   let data = String(Math.floor(Math.random() * (10000000 - 1)) + 1);
-  http.del('http://localhost:8080/key/' + data, null, {
+  http.del('http://' + SERVER_ADDR + '/key/' + data, null, {
     tags: { name: 'DELETE /key/[id]' },
     headers: { 'Content-Type': 'text/plain' }
   });
