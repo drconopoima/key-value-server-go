@@ -132,7 +132,7 @@ def start_go_server(server_addr: str, data_file: str) -> subprocess.Popen:
     env["PORT"] = port
     env["STORAGE_DIR"] = Path(data_file).parent.resolve()
     
-    cmd = ["go", "run", ".", "-release"]
+    cmd = ["go", "run", "."]
     
     proc = subprocess.Popen(
         cmd,
@@ -317,8 +317,11 @@ def get_throughput_from_metrics(metrics: Optional[Dict]) -> Optional[float]:
         if "data" in metrics:
             for metric in metrics["data"]:
                 if metric.get("id") == "http_reqs":
-                    rate = metric.get("attributes", {}).get("sample", {}).get("rate", 0)
-                    return float(rate)
+                    print(f'{metric}')
+                    attributes = metric.get("attributes", {})
+                    sample = attributes.get("sample", {})
+                    rate = float(sample.get("rate", 0.0))
+                    return rate
         
         # Fallback: try old format {"metrics": {"http_reqs": {"values": {"rate": X}}}}
         if "metrics" in metrics:
