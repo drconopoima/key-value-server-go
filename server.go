@@ -47,7 +47,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	cmap "github.com/orcaman/concurrent-map/v2"
+	cmap "github.com/drconopoima/concurrent-map/v2"
 )
 
 // syncMap is a thread-safe map wrapper for JSON marshaling/unmarshaling.
