@@ -69,8 +69,12 @@ func main() {
 	router.Get("/key/{key}", func(writerGet http.ResponseWriter, requestGet *http.Request) {
 		key := chi.URLParam(requestGet, "key")
 		dataGet := Get(requestGet.Context(), key)
+		if dataGet != nil {
+			JSON(writerGet, dataGet)
+		} else {
+			writerGet.WriteHeader(http.StatusNotFound)
+		}
 
-		JSON(writerGet, dataGet)
 	})
 	router.Delete("/key/{key}", func(writerDelete http.ResponseWriter, requestDelete *http.Request) {
 		key := chi.URLParam(requestDelete, "key")
@@ -109,10 +113,10 @@ func JSON(writer http.ResponseWriter, dataJson interface{}) {
 }
 
 // Get: Retrieve value at specified key
-func Get(context context.Context, key string) string {
+func Get(context context.Context, key string) interface{} {
 	valueString, ok := data.Get(key)
 	if !ok {
-		return ""
+		return nil
 	}
 	return valueString
 }
