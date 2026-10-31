@@ -35,7 +35,15 @@ func main() {
 	if portFromEnv := os.Getenv("PORT"); portFromEnv != "" {
 		port = portFromEnv
 	}
-	log.Printf("Starting up server on http://localhost:%v", port)
+	address := ""
+	if addressFromEnv := os.Getenv("ADDRESS"); addressFromEnv != "" {
+		address = addressFromEnv
+	}
+	if address != "" {
+		log.Printf("Starting up server on http://%v:%v", address, port)
+	} else {
+		log.Printf("Starting up server on http://0.0.0.0:%v", port)
+	}
 	// Get persistence file from STORAGE_DIR environment variable
 	storageDir := os.Getenv("STORAGE_DIR")
 	dataFile := dataPath(storageDir)
@@ -82,7 +90,11 @@ func main() {
 
 		JSON(writerSet, map[string]string{"status": "success"})
 	})
-	log.Fatal(http.ListenAndServe(":"+port, router))
+	if address != "" {
+		log.Fatal(http.ListenAndServe(address+":"+port, router))
+	} else {
+		log.Fatal(http.ListenAndServe(":"+port, router))
+	}
 }
 
 // JSON: Encode and write json data to the HTTP response
