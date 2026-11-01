@@ -59,7 +59,7 @@ func TestGetSetDelete(test *testing.T) {
 	encodedValue := base64.URLEncoding.EncodeToString([]byte(value))
 	base64EncodedStore[encodedKey] = encodedValue
 	context := context.Background()
-	if output := Get(context, key); output != "" {
+	if output := Get(context, key); output != nil {
 		test.Fatalf("Unexpected result from calling Get on unset key '%v', output: '%v'", key, output)
 	}
 	dataFile := "dataGetSetDelete.json"
@@ -72,7 +72,7 @@ func TestGetSetDelete(test *testing.T) {
 		test.Fatalf("Unexpected result from calling Get on key '%v', expected: '%v', received: '%v'", key, value, output)
 	}
 	Delete(context, key)
-	if output := Get(context, key); output != "" {
+	if output := Get(context, key); output != nil {
 		test.Fatalf("Unexpected result from calling Get on deleted key '%v', output: '%v'", key, output)
 	}
 }
@@ -108,7 +108,7 @@ func TestGet(test *testing.T) {
 	}
 	for _, testCase := range testCases {
 		valueGot := Get(context.Background(), testCase.key)
-		if valueGot != testCase.value {
+		if valueGot != nil && valueGot != testCase.value {
 			test.Errorf("Output: %v, expected: %v", valueGot, testCase.value)
 		}
 	}

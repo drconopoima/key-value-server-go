@@ -41,13 +41,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"sync"
 	"time"
 
+	cmap "github.com/drconopoima/concurrent-map/v2"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	cmap "github.com/drconopoima/concurrent-map/v2"
 )
 
 // syncMap is a thread-safe map wrapper for JSON marshaling/unmarshaling.
@@ -91,7 +92,19 @@ func main() {
 		address = addressFromEnv
 	}
 	if address != "" {
-		log.Printf("Starting up server on http://%v:%v", address, port)
+		ipv4Regexp := `^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)|\d){3}$`
+		if !regexp.MustCompile(ipv4Regexp).MatchString(address) {
+			ipv6Regexp := `^\[([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}\]$`
+			if !regexp.MustCompile(ipv6Regexp).MatchString(address) {
+				log.Printf("[Warning] ADDRESS environment variable %v is not a valid IPv4 or IPv6 address. Binding to all interfaces instead.", address)
+				address = ""
+			}
+		}
+		if address == "" {
+			log.Printf("Starting up server on http://0.0.0.0:%v", port)
+		} else {
+			log.Printf("Starting up server on http://%v:%v", address, port)
+		}
 	} else {
 		log.Printf("Starting up server on http://0.0.0.0:%v", port)
 	}
