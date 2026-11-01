@@ -90,23 +90,17 @@ func main() {
 	address := ""
 	if addressFromEnv := os.Getenv("ADDRESS"); addressFromEnv != "" {
 		address = addressFromEnv
-	}
-	if address != "" {
 		ipv4Regexp := `^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)|\d){3}$`
-		if !regexp.MustCompile(ipv4Regexp).MatchString(address) {
-			ipv6Regexp := `^\[([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}\]$`
-			if !regexp.MustCompile(ipv6Regexp).MatchString(address) {
-				log.Printf("[Warning] ADDRESS environment variable %v is not a valid IPv4 or IPv6 address. Binding to all interfaces instead.", address)
-				address = ""
-			}
+		ipv6Regexp := `^\[([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}\]$`
+		if !regexp.MustCompile(ipv4Regexp).MatchString(address) && !regexp.MustCompile(ipv6Regexp).MatchString(address) {
+			log.Printf("[Warning] ADDRESS environment variable '%v' is not a valid IPv4 or IPv6 address. Binding to all interfaces instead.", address)
+			address = ""
 		}
-		if address == "" {
-			log.Printf("Starting up server on http://0.0.0.0:%v", port)
-		} else {
-			log.Printf("Starting up server on http://%v:%v", address, port)
-		}
-	} else {
+	}
+	if address == "" {
 		log.Printf("Starting up server on http://0.0.0.0:%v", port)
+	} else {
+		log.Printf("Starting up server on http://%v:%v", address, port)
 	}
 	// Get persistence file from STORAGE_DIR environment variable
 	storageDir := os.Getenv("STORAGE_DIR")
