@@ -89,12 +89,12 @@ func main() {
 	}
 	address := ""
 	if addressFromEnv := os.Getenv("ADDRESS"); addressFromEnv != "" {
-		address = addressFromEnv
 		ipv4Regexp := `^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)|\d){3}$`
 		ipv6Regexp := `^\[([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}\]$`
-		if !regexp.MustCompile(ipv4Regexp).MatchString(address) && !regexp.MustCompile(ipv6Regexp).MatchString(address) {
-			log.Printf("[Warning] ADDRESS environment variable '%v' is not a valid IPv4 or IPv6 address. Binding to all interfaces instead.", address)
-			address = ""
+		if !regexp.MustCompile(ipv4Regexp).MatchString(addressFromEnv) && !regexp.MustCompile(ipv6Regexp).MatchString(addressFromEnv) {
+			log.Printf("[Warning] ADDRESS environment variable '%v' is not a valid IPv4 or IPv6 address. Binding to all interfaces instead.", addressFromEnv)
+		} else {
+			address = addressFromEnv
 		}
 	}
 	if address == "" {
